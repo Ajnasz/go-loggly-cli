@@ -22,13 +22,13 @@ $ go-loggly-cli -version
   Options:
 
     -account <name>   account name
-    -user <name>      account username
-    -pass <word>      account password
+    -token <word>     user token
     -size <count>     response event count [100]
     -from <time>      starting time [-24h]
     -to <time>        ending time [now]
-    -json             output json array of events
-    -count            output total event count
+    -count            print total event count
+    -all              print the entire loggly event instead of just the message
+    -version          print version information
 
 ```
 
