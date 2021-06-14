@@ -13,7 +13,7 @@ import (
 )
 
 // Version is the version string
-const Version = "0.0.1"
+var version string
 
 //
 // Usage information.
@@ -65,7 +65,7 @@ const usage = `
 var flags = flag.NewFlagSet("loggly", flag.ExitOnError)
 var count = flags.Bool("count", false, "")
 var json = flags.Bool("json", false, "")
-var version = flags.Bool("version", false, "")
+var versionQuery = flags.Bool("version", false, "")
 var account = flags.String("account", "", "")
 var token = flags.String("token", "", "")
 var size = flags.Int("size", 100, "")
@@ -126,8 +126,8 @@ func main() {
 	flags.Parse(os.Args[1:])
 
 	// --version
-	if *version {
-		fmt.Println(Version)
+	if *versionQuery {
+		fmt.Println(version)
 		os.Exit(0)
 	}
 
