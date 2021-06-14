@@ -103,11 +103,11 @@ func printJSON(events []interface{}) error {
 func printLogMSG(events []interface{}) error {
 	var ret []interface{}
 
-	for _, event := range events {
+	for i, event := range events {
 		msg := event.(map[string]interface{})["logmsg"].(string)
 		m := make(map[string]interface{})
 		if err := json.Unmarshal([]byte(msg), &m); err != nil {
-			return err
+			return fmt.Errorf("Error at event %d: %w", i+1, err)
 		}
 
 		ret = append(ret, m)
@@ -145,6 +145,8 @@ func main() {
 	if *allMsg {
 		check(printJSON(res.Events))
 	} else {
-		check(printLogMSG(res.Events))
+		if err := printLogMSG(res.Events); err != nil {
+			fmt.Fprintf(os.Stderr, "Invalid JSON in the 'logmsg' field. Consider to filter the messages, or use the -all flag and parse the message yourself.\n\n%s", err.Error())
+		}
 	}
 }
