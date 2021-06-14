@@ -1,15 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	search "github.com/Ajnasz/go-loggly-cli/search"
-	j "github.com/bitly/go-simplejson"
-	"github.com/jehiah/go-strftime"
 )
 
 // Version is the version string
@@ -29,9 +27,8 @@ const usage = `
     -size <count>     response event count [100]
     -from <time>      starting time [-24h]
     -to <time>        ending time [now]
-    -json             output json array of events
-    -count            output total event count
-    -version          output version information
+    -count            print total event count
+    -version          print version information
 
   Operators:
 
@@ -58,13 +55,9 @@ const usage = `
 
 `
 
-//
 // Command options.
-//
-
 var flags = flag.NewFlagSet("loggly", flag.ExitOnError)
 var count = flags.Bool("count", false, "")
-var json = flags.Bool("json", false, "")
 var versionQuery = flags.Bool("version", false, "")
 var account = flags.String("account", "", "")
 var token = flags.String("token", "", "")
@@ -93,9 +86,33 @@ func check(err error) {
 	}
 }
 
-//
-// Main.
-//
+func printJSON(events []interface{}) error {
+	data, err := json.Marshal(events)
+
+	if err != nil {
+		return err
+	}
+
+	fmt.Println(string(data))
+
+	return nil
+}
+
+func printLogMSG(events []interface{}) error {
+	var ret []interface{}
+
+	for _, event := range events {
+		msg := event.(map[string]interface{})["logmsg"].(string)
+		m := make(map[string]interface{})
+		if err := json.Unmarshal([]byte(msg), &m); err != nil {
+			return err
+		}
+
+		ret = append(ret, m)
+	}
+
+	return printJSON(ret)
+}
 
 func main() {
 	flags.Usage = printUsage
@@ -123,69 +140,5 @@ func main() {
 	res, err := c.Query(query).Size(*size).From(*from).To(*to).Fetch()
 	check(err)
 
-	// -json
-	if *json {
-		outputJSON(res.Events)
-		os.Exit(0)
-	}
-
-	// formatted
-	output(res.Events)
-}
-
-// Output as json.
-func outputJSON(events []interface{}) {
-	fmt.Println("[")
-
-	l := len(events)
-
-	for i, event := range events {
-		msg := event.(map[string]interface{})["logmsg"].(string)
-		if i < l-1 {
-			fmt.Printf("  %s,\n", msg)
-		} else {
-			fmt.Printf("  %s\n", msg)
-		}
-	}
-
-	fmt.Println("]")
-}
-
-// Formatted output.
-func output(events []interface{}) {
-	for _, event := range events {
-		msg := event.(map[string]interface{})["logmsg"].(string)
-		obj, err := j.NewJson([]byte(msg))
-
-		if err != nil {
-			fmt.Println(msg)
-			continue
-		}
-
-		host := obj.Get("hostname").MustString()
-		level := obj.Get("level").MustString()
-		ts := timeFromUnix(int64(obj.Get("timestamp").MustInt()))
-		t := obj.Get("type").MustString()
-		c := colors[level]
-
-		obj.Get("hostname").Array()
-		obj.Del("level")
-		obj.Del("timestamp")
-		obj.Del("type")
-
-		json, err := obj.EncodePretty()
-		check(err)
-
-		date := strftime.Format("%m-%d %I:%M:%S %p", ts)
-		level = strings.ToUpper(level)
-		fmt.Printf("\n\033["+c+"m%s: %s \033[90m(%s)\033[0m %s\n", level, t, host, date)
-		fmt.Printf("\n%s\n", string(json))
-	}
-
-	fmt.Println()
-}
-
-// Time from ms timestamp.
-func timeFromUnix(ms int64) time.Time {
-	return time.Unix(0, ms*int64(time.Millisecond))
+	check(printLogMSG(res.Events))
 }
