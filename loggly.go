@@ -125,16 +125,14 @@ func main() {
 	flags.Usage = printUsage
 	flags.Parse(os.Args[1:])
 
-	// --version
+	// -version
 	if *versionQuery {
 		fmt.Println(version)
 		os.Exit(0)
 	}
 
-	assert(*account != "", "--account required")
-	assert(*token != "", "--token required")
-	// assert(*user != "", "--user required")
-	// assert(*pass != "", "--pass required")
+	assert(*account != "", "-account required")
+	assert(*token != "", "-token required")
 
 	// setup
 
@@ -142,7 +140,7 @@ func main() {
 	query := strings.Join(args, " ")
 	c := search.New(*account, *token)
 
-	// --count
+	// -count
 	if *count {
 		res, err := c.Query(query).Size(1).From(*from).To(*to).Fetch()
 		check(err)
@@ -153,7 +151,7 @@ func main() {
 	res, err := c.Query(query).Size(*size).From(*from).To(*to).Fetch()
 	check(err)
 
-	// --json
+	// -json
 	if *json {
 		outputJSON(res.Events)
 		os.Exit(0)
