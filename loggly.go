@@ -28,6 +28,7 @@ const usage = `
     -from <time>      starting time [-24h]
     -to <time>        ending time [now]
     -count            print total event count
+    -all              print the entire loggly event instead of just the message
     -version          print version information
 
   Operators:
@@ -64,6 +65,7 @@ var token = flags.String("token", "", "")
 var size = flags.Int("size", 100, "")
 var from = flags.String("from", "-24h", "")
 var to = flags.String("to", "now", "")
+var allMsg = flags.Bool("all", false, "")
 
 // Print usage and exit.
 func printUsage() {
@@ -140,5 +142,9 @@ func main() {
 	res, err := c.Query(query).Size(*size).From(*from).To(*to).Fetch()
 	check(err)
 
-	check(printLogMSG(res.Events))
+	if *allMsg {
+		check(printJSON(res.Events))
+	} else {
+		check(printLogMSG(res.Events))
+	}
 }
