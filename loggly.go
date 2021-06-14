@@ -72,43 +72,19 @@ var size = flags.Int("size", 100, "")
 var from = flags.String("from", "-24h", "")
 var to = flags.String("to", "now", "")
 
-//
-// Colors.
-//
-
-var colors = map[string]string{
-	"debug":     "90",
-	"info":      "32",
-	"notice":    "33",
-	"warning":   "33",
-	"critical":  "31",
-	"alert":     "31;1",
-	"emergency": "31;1",
-}
-
-//
 // Print usage and exit.
-//
-
 func printUsage() {
 	fmt.Println(usage)
 	os.Exit(0)
 }
 
-//
 // Assert with msg.
-//
-
 func assert(ok bool, msg string) {
 	if !ok {
 		fmt.Printf("\n  Error: %s\n\n", msg)
 		os.Exit(1)
 	}
 }
-
-//
-// Check error.
-//
 
 func check(err error) {
 	if err != nil {
@@ -125,7 +101,6 @@ func main() {
 	flags.Usage = printUsage
 	flags.Parse(os.Args[1:])
 
-	// -version
 	if *versionQuery {
 		fmt.Println(version)
 		os.Exit(0)
@@ -134,13 +109,10 @@ func main() {
 	assert(*account != "", "-account required")
 	assert(*token != "", "-token required")
 
-	// setup
-
 	args := flags.Args()
 	query := strings.Join(args, " ")
 	c := search.New(*account, *token)
 
-	// -count
 	if *count {
 		res, err := c.Query(query).Size(1).From(*from).To(*to).Fetch()
 		check(err)
