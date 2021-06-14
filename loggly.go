@@ -81,14 +81,14 @@ func printUsage() {
 // Assert with msg.
 func assert(ok bool, msg string) {
 	if !ok {
-		fmt.Printf("\n  Error: %s\n\n", msg)
+		fmt.Fprintf(os.Stderr, "\n  Error: %s\n\n", msg)
 		os.Exit(1)
 	}
 }
 
 func check(err error) {
 	if err != nil {
-		fmt.Printf("\n  Error: %s\n\n", err)
+		fmt.Fprintf(os.Stderr, "\n  Error: %s\n\n", err)
 		os.Exit(1)
 	}
 }
