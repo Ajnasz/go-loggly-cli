@@ -1,18 +1,18 @@
 package main
 
-import "github.com/segmentio/go-loggly-search"
-import j "github.com/segmentio/go-simplejson"
-import "github.com/jehiah/go-strftime"
-import "strings"
-import "flag"
-import "time"
-import "fmt"
-import "os"
+import (
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+	"time"
 
-//
-// Version.
-//
+	search "github.com/Ajnasz/go-loggly-cli/search"
+	j "github.com/bitly/go-simplejson"
+	"github.com/jehiah/go-strftime"
+)
 
+// Version is the version string
 const Version = "0.0.1"
 
 //
@@ -24,15 +24,14 @@ const usage = `
 
   Options:
 
-    --account <name>   account name
-    --user <name>      account username
-    --pass <word>      account password
-    --size <count>     response event count [100]
-    --from <time>      starting time [-24h]
-    --to <time>        ending time [now]
-    --json             output json array of events
-    --count            output total event count
-    --version          output version information
+    -account <name>   account name
+    -token <word>     user token
+    -size <count>     response event count [100]
+    -from <time>      starting time [-24h]
+    -to <time>        ending time [now]
+    -json             output json array of events
+    -count            output total event count
+    -version          output version information
 
   Operators:
 
@@ -68,8 +67,7 @@ var count = flags.Bool("count", false, "")
 var json = flags.Bool("json", false, "")
 var version = flags.Bool("version", false, "")
 var account = flags.String("account", "", "")
-var user = flags.String("user", "", "")
-var pass = flags.String("pass", "", "")
+var token = flags.String("token", "", "")
 var size = flags.Int("size", 100, "")
 var from = flags.String("from", "-24h", "")
 var to = flags.String("to", "now", "")
@@ -134,14 +132,15 @@ func main() {
 	}
 
 	assert(*account != "", "--account required")
-	assert(*user != "", "--user required")
-	assert(*pass != "", "--pass required")
+	assert(*token != "", "--token required")
+	// assert(*user != "", "--user required")
+	// assert(*pass != "", "--pass required")
 
 	// setup
 
 	args := flags.Args()
 	query := strings.Join(args, " ")
-	c := search.New(*account, *user, *pass)
+	c := search.New(*account, *token)
 
 	// --count
 	if *count {
@@ -156,7 +155,7 @@ func main() {
 
 	// --json
 	if *json {
-		outputJson(res.Events)
+		outputJSON(res.Events)
 		os.Exit(0)
 	}
 
@@ -164,11 +163,8 @@ func main() {
 	output(res.Events)
 }
 
-//
 // Output as json.
-//
-
-func outputJson(events []interface{}) {
+func outputJSON(events []interface{}) {
 	fmt.Println("[")
 
 	l := len(events)
@@ -185,10 +181,7 @@ func outputJson(events []interface{}) {
 	fmt.Println("]")
 }
 
-//
 // Formatted output.
-//
-
 func output(events []interface{}) {
 	for _, event := range events {
 		msg := event.(map[string]interface{})["logmsg"].(string)
@@ -201,11 +194,11 @@ func output(events []interface{}) {
 
 		host := obj.Get("hostname").MustString()
 		level := obj.Get("level").MustString()
-		ts := timeFromUnix(obj.Get("timestamp").MustInt64())
+		ts := timeFromUnix(int64(obj.Get("timestamp").MustInt()))
 		t := obj.Get("type").MustString()
 		c := colors[level]
 
-		obj.Del("hostname")
+		obj.Get("hostname").Array()
 		obj.Del("level")
 		obj.Del("timestamp")
 		obj.Del("type")
@@ -222,10 +215,7 @@ func output(events []interface{}) {
 	fmt.Println()
 }
 
-//
 // Time from ms timestamp.
-//
-
 func timeFromUnix(ms int64) time.Time {
 	return time.Unix(0, ms*int64(time.Millisecond))
 }
