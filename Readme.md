@@ -4,7 +4,7 @@ Loggly search command-line tool.
 
 ## Installation
 
-Download from the [releases](/Ajnasz/go-loggly-cli/releases/latest)
+Download from the [releases](/releases/latest)
 
 Quick install via go-get:
 
