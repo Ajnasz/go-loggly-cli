@@ -28,12 +28,13 @@ type Response struct {
 
 // Query builder struct
 type Query struct {
-	client *Client
-	query  string
-	from   string
-	until  string
-	order  string
-	size   int
+	client   *Client
+	query    string
+	from     string
+	until    string
+	order    string
+	size     int
+	maxPages int
 }
 
 // Create a new query
@@ -59,14 +60,14 @@ func New(account string, token string) *Client {
 	return c
 }
 
-// Url Return the base api url.
-func (c *Client) Url() string {
+// URL Return the base api url.
+func (c *Client) URL() string {
 	return fmt.Sprintf("https://%s.%s", c.Account, c.Endpoint)
 }
 
 // Get the given path.
 func (c *Client) Get(path string) (*http.Response, error) {
-	r, err := http.NewRequest(http.MethodGet, c.Url()+path, nil)
+	r, err := http.NewRequest(http.MethodGet, c.URL()+path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -76,7 +77,7 @@ func (c *Client) Get(path string) (*http.Response, error) {
 	return client.Do(r)
 }
 
-// Get json from the given path.
+// GetJSON from the given path.
 func (c *Client) GetJSON(path string) (j *simplejson.Json, err error) {
 	res, err := c.Get(path)
 
@@ -114,15 +115,10 @@ func (c *Client) GetEvents(params string) (*simplejson.Json, error) {
 
 // Search response with total events, page number
 // and the events array.
-func (c *Client) Search(params string) (*Response, error) {
-	j, err := c.CreateSearch(params)
-
-	if err != nil {
-		return nil, err
-	}
-
+func (c *Client) Search(j *simplejson.Json, page int) (*Response, error) {
 	id := j.GetPath("rsid", "id").MustString()
-	j, err = c.GetEvents("rsid=" + id)
+
+	j, err := c.GetEvents("rsid=" + id + "&page=" + strconv.Itoa(page))
 
 	if err != nil {
 		return nil, err
@@ -135,6 +131,7 @@ func (c *Client) Search(params string) (*Response, error) {
 		Page:   j.Get("page").MustInt64(),
 		Events: j.Get("events").MustArray(),
 	}, nil
+
 }
 
 // Query Create a new search query using the fluent api.
@@ -165,6 +162,12 @@ func (q *Query) From(str string) *Query {
 	return q
 }
 
+// MaxPage sets the max page
+func (q *Query) MaxPage(maxPages int) *Query {
+	q.maxPages = maxPages
+	return q
+}
+
 // Until Set until time.
 func (q *Query) Until(str string) *Query {
 	q.until = str
@@ -179,6 +182,43 @@ func (q *Query) To(str string) *Query {
 
 // Fetch Search response with total events, page number
 // and the events array.
-func (q *Query) Fetch() (*Response, error) {
-	return q.client.Search(q.String())
+func (q *Query) Fetch() (chan Response, chan error) {
+	resChan := make(chan Response)
+	errChan := make(chan error)
+
+	page := 0
+	go func() {
+		defer close(resChan)
+		defer close(errChan)
+		j, err := q.client.CreateSearch(q.String())
+
+		if err != nil {
+			errChan <- err
+			return
+		}
+
+		for {
+			res, err := q.client.Search(j, page)
+
+			if err != nil {
+				errChan <- err
+				return
+			}
+
+			resChan <- *res
+
+			if page+1 == q.maxPages {
+				return
+			}
+
+			if len(res.Events) < q.size {
+				return
+			}
+
+			page++
+		}
+
+	}()
+
+	return resChan, errChan
 }
