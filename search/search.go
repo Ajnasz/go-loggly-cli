@@ -73,6 +73,7 @@ func (c *Client) Get(path string) (*http.Response, error) {
 	}
 
 	r.Header.Add("Authorization", fmt.Sprintf("bearer %s", c.Token))
+	r.Header.Set("User-Agent", "go-loggly-cli/1 author/Ajnasz")
 	client := &http.Client{}
 	return client.Do(r)
 }
