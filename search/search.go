@@ -218,7 +218,6 @@ func (q *Query) Fetch() (chan Response, chan error) {
 
 			page++
 		}
-
 	}()
 
 	return resChan, errChan

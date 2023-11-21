@@ -54,7 +54,6 @@ const usage = `
   Regexps:
 
     /Black(Berry)?/
-
 `
 
 // Command options.
@@ -71,7 +70,7 @@ var allMsg = flags.Bool("all", false, "")
 
 // Print usage and exit.
 func printUsage() {
-	fmt.Println(usage)
+	fmt.Print(usage)
 	os.Exit(0)
 }
 
