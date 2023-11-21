@@ -28,8 +28,8 @@ $ go-loggly-cli -version
     -to <time>        ending time [now]
     -count            print total event count
     -all              print the entire loggly event instead of just the message
+    -maxPages <count> maximum number of pages to query [3]
     -version          print version information
-
 ```
 
 ## Setup
