@@ -172,7 +172,7 @@ func main() {
 
 	if *versionQuery {
 		fmt.Println(version)
-		os.Exit(0)
+		return
 	}
 
 	assert(*account != "", "-account required")
