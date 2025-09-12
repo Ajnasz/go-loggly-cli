@@ -165,6 +165,23 @@ func sendQuery(query string, size int, from string, to string, maxPages int) {
 	check(<-doneChan)
 }
 
+func warnInvalidFlagPlacement(args []string) {
+	currentFlags := make(map[string]bool)
+	flags.VisitAll(func(f *flag.Flag) {
+		currentFlags["-"+f.Name] = true
+	})
+	var invalidFlags []string
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") && currentFlags[arg] {
+			invalidFlags = append(invalidFlags, arg)
+		}
+	}
+
+	if len(invalidFlags) > 0 {
+		fmt.Fprintf(os.Stderr, " Warning: Possible invalid flag placement. Flags must be specified before the query. Ignoring flags: %s\n", strings.Join(invalidFlags, ", "))
+	}
+}
+
 func main() {
 	flags.Usage = printUsage
 	flags.Parse(os.Args[1:])
@@ -178,6 +195,7 @@ func main() {
 	assert(*token != "", "-token required")
 
 	args := flags.Args()
+	warnInvalidFlagPlacement(args)
 	query := strings.Join(args, " ")
 
 	if *count {
