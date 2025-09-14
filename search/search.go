@@ -2,20 +2,24 @@ package search
 
 import (
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
+	"sync"
+	"sync/atomic"
 
+	"github.com/Ajnasz/go-loggly-cli/orderedbuffer"
 	"github.com/bitly/go-simplejson"
 )
 
 // Client Loggly search client with user credentials, loggly
 // does not seem to support tokens right now.
 type Client struct {
-	Token    string
-	Account  string
-	Endpoint string
+	Token       string
+	Account     string
+	Endpoint    string
+	concurrency int
 }
 
 // Response Search response with total events, page number
@@ -23,7 +27,7 @@ type Client struct {
 type Response struct {
 	Total  int64
 	Page   int64
-	Events []interface{}
+	Events []any
 }
 
 // Query builder struct
@@ -60,6 +64,14 @@ func New(account string, token string) *Client {
 	return c
 }
 
+func (c *Client) SetConcurrency(n int) *Client {
+	if n < 1 {
+		n = 1
+	}
+	c.concurrency = n
+	return c
+}
+
 // URL Return the base api url.
 func (c *Client) URL() string {
 	return fmt.Sprintf("https://%s.%s", c.Account, c.Endpoint)
@@ -89,10 +101,11 @@ func (c *Client) GetJSON(path string) (j *simplejson.Json, err error) {
 	defer res.Body.Close()
 
 	if res.StatusCode >= 400 {
-		return nil, fmt.Errorf("go-loggly-search: %q", res.Status)
+		body, _ := io.ReadAll(res.Body)
+		return nil, fmt.Errorf("go-loggly-search: %q, %s", res.Status, body)
 	}
 
-	body, err := ioutil.ReadAll(res.Body)
+	body, err := io.ReadAll(res.Body)
 
 	if err != nil {
 		return
@@ -187,7 +200,12 @@ func (q *Query) Fetch() (chan Response, chan error) {
 	resChan := make(chan Response)
 	errChan := make(chan error)
 
-	page := 0
+	concurrent := min(q.maxPages, q.client.concurrency)
+
+	pool := make(chan struct{}, concurrent)
+
+	var page atomic.Int64
+	page.Store(-1)
 	go func() {
 		defer close(resChan)
 		defer close(errChan)
@@ -198,26 +216,45 @@ func (q *Query) Fetch() (chan Response, chan error) {
 			return
 		}
 
+		var wg sync.WaitGroup
+		var hasMore atomic.Bool
+		hasMore.Store(true)
+		var lastPrintedPage atomic.Int32
+		lastPrintedPage.Store(-1)
+		responsesStore := orderedbuffer.NewOrderedBuffer(resChan)
 		for {
-			res, err := q.client.Search(j, page)
+			pool <- struct{}{}
+			wg.Add(1)
+			go func(page int) {
+				defer wg.Done()
+				defer func() { <-pool }()
 
-			if err != nil {
-				errChan <- err
-				return
+				res, err := q.client.Search(j, page)
+				if err != nil {
+					errChan <- err
+					hasMore.Store(false)
+					return
+				}
+
+				if res != nil {
+					// resChan <- *res
+					responsesStore.Store(page, *res)
+
+					if len(res.Events) < q.size {
+						hasMore.Store(false)
+						return
+					}
+				} else {
+					hasMore.Store(false)
+					return
+				}
+			}(int(page.Add(1)))
+			if int(page.Load()) >= q.maxPages || !hasMore.Load() {
+				break
 			}
-
-			resChan <- *res
-
-			if page+1 == q.maxPages {
-				return
-			}
-
-			if len(res.Events) < q.size {
-				return
-			}
-
-			page++
 		}
+
+		wg.Wait()
 	}()
 
 	return resChan, errChan

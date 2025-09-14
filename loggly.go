@@ -30,6 +30,7 @@ const usage = `
     -count            print total event count
     -all              print the entire loggly event instead of just the message
     -maxPages <count> maximum number of pages to query [3]
+    -concurrency <count> number of concurrent page fetchers [3]
     -version          print version information
 
   Operators:
@@ -59,6 +60,7 @@ const usage = `
 // Command options.
 var flags = flag.NewFlagSet("loggly", flag.ExitOnError)
 var count = flags.Bool("count", false, "")
+var concurrency = flags.Int("concurrency", 3, "")
 var versionQuery = flags.Bool("version", false, "")
 var account = flags.String("account", "", "")
 var maxPages = flags.Int("maxPages", 3, "")
@@ -143,10 +145,10 @@ func printRes(res search.Response) {
 	}
 }
 
-func sendQuery(query string, size int, from string, to string, maxPages int) {
+func sendQuery(query string, size int, from string, to string, maxPages int, concurrency int) {
 	doneChan := make(chan error)
 
-	c := search.New(*account, *token)
+	c := search.New(*account, *token).SetConcurrency(concurrency)
 	res, err := c.Query(query).Size(size).From(from).To(to).MaxPage(maxPages).Fetch()
 
 	go func() {
@@ -182,6 +184,12 @@ func warnInvalidFlagPlacement(args []string) {
 	}
 }
 
+func warnHighConcurrency(concurrency int) {
+	if concurrency > 3 {
+		fmt.Fprintf(os.Stderr, " Warning: High concurrency (%d) may lead to rate limiting or temporary blocking by Loggly. Consider reducing the concurrency level.\n", concurrency)
+	}
+}
+
 func main() {
 	flags.Usage = printUsage
 	flags.Parse(os.Args[1:])
@@ -196,6 +204,7 @@ func main() {
 
 	args := flags.Args()
 	warnInvalidFlagPlacement(args)
+	warnHighConcurrency(*concurrency)
 	query := strings.Join(args, " ")
 
 	if *count {
@@ -203,5 +212,5 @@ func main() {
 		return
 	}
 
-	sendQuery(query, *size, *from, *to, *maxPages)
+	sendQuery(query, *size, *from, *to, *maxPages, *concurrency)
 }
