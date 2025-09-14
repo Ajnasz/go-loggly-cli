@@ -237,7 +237,6 @@ func (q *Query) Fetch() (chan Response, chan error) {
 				}
 
 				if res != nil {
-					// resChan <- *res
 					responsesStore.Store(page, *res)
 
 					if len(res.Events) < q.size {

@@ -7,7 +7,7 @@ import (
 	"os"
 	"strings"
 
-	search "github.com/Ajnasz/go-loggly-cli/search"
+	"github.com/Ajnasz/go-loggly-cli/search"
 )
 
 // Version is the version string
@@ -91,7 +91,7 @@ func check(err error) {
 	}
 }
 
-func printJSON(events []interface{}) error {
+func printJSON(events []any) error {
 	for _, event := range events {
 		data, err := json.Marshal(event)
 		if err != nil {
@@ -104,12 +104,12 @@ func printJSON(events []interface{}) error {
 	return nil
 }
 
-func printLogMSG(events []interface{}) error {
-	var ret []interface{}
+func printLogMSG(events []any) error {
+	var ret []any
 
 	for i, event := range events {
-		msg := event.(map[string]interface{})["logmsg"].(string)
-		m := make(map[string]interface{})
+		msg := event.(map[string]any)["logmsg"].(string)
+		m := make(map[string]any)
 		if err := json.Unmarshal([]byte(msg), &m); err != nil {
 			return fmt.Errorf("Error at event %d: %w", i+1, err)
 		}
