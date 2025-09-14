@@ -29,6 +29,7 @@ $ go-loggly-cli -version
     -count            print total event count
     -all              print the entire loggly event instead of just the message
     -maxPages <count> maximum number of pages to query [3]
+    -concurrency <count> number of concurrent page fetchers [3]
     -version          print version information
 ```
 
