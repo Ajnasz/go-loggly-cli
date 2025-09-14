@@ -56,3 +56,45 @@ func TestOrderedBufferConcurrent(t *testing.T) {
 		}
 	}
 }
+
+func BenchmarkOrderedBufferOrderedDelivery(b *testing.B) {
+	ch := make(chan int, b.N)
+	buf := NewOrderedBuffer(ch)
+	go func() {
+		for range ch {
+		}
+	}()
+	for i := 0; b.Loop(); i++ {
+		buf.Store(i, i)
+	}
+	close(ch)
+}
+
+func BenchmarkOrderedBufferOutOfOrder(b *testing.B) {
+	ch := make(chan int, b.N)
+	buf := NewOrderedBuffer(ch)
+	go func() {
+		for range ch {
+		}
+	}()
+	for i := b.N - 1; i >= 0; i-- {
+		buf.Store(i, i)
+	}
+	close(ch)
+}
+
+func BenchmarkOrderedBufferConcurrent(b *testing.B) {
+	ch := make(chan int, b.N)
+	buf := NewOrderedBuffer(ch)
+	go func() {
+		for range ch {
+		}
+	}()
+	b.RunParallel(func(pb *testing.PB) {
+		i := 0
+		for pb.Next() {
+			buf.Store(i, i)
+			i++
+		}
+	})
+}
