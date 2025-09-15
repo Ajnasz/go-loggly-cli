@@ -1,6 +1,7 @@
 package search
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -158,7 +159,7 @@ func shouldStopFetching(err error, res *Response, pageSize int) bool {
 	return false
 }
 
-func (c *Client) fetchAllPages(q Query, resChan chan Response, errChan chan error) {
+func (c *Client) fetchAllPages(ctx context.Context, q Query, resChan chan Response, errChan chan error) {
 	defer close(resChan)
 	defer close(errChan)
 	j, err := c.CreateSearch(q.String())
@@ -186,6 +187,12 @@ func (c *Client) fetchAllPages(q Query, resChan chan Response, errChan chan erro
 			defer wg.Done()
 			defer func() { <-pool }()
 
+			if ctx.Err() != nil {
+				errChan <- ctx.Err()
+				hasMore.Store(false)
+				return
+			}
+
 			res, err := c.fetchAndStorePage(j, responsesStore, page)
 
 			if shouldStopFetching(err, res, q.size) {
@@ -212,11 +219,11 @@ func (c *Client) fetchAllPages(q Query, resChan chan Response, errChan chan erro
 // and return the results in order on the response channel.
 // Errors are sent on the error channel.
 // Both channels are closed when all fetching is done or an error occurs.
-func (c *Client) Fetch(q Query) (chan Response, chan error) {
+func (c *Client) Fetch(ctx context.Context, q Query) (chan Response, chan error) {
 	resChan := make(chan Response)
 	errChan := make(chan error)
 
-	go c.fetchAllPages(q, resChan, errChan)
+	go c.fetchAllPages(ctx, q, resChan, errChan)
 
 	return resChan, errChan
 }

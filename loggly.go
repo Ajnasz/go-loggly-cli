@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/Ajnasz/go-loggly-cli/search"
 )
@@ -79,14 +82,14 @@ func printUsage() {
 // Assert with msg.
 func assert(ok bool, msg string) {
 	if !ok {
-		fmt.Fprintf(os.Stderr, "\n  Error: %s\n\n", msg)
+		fmt.Fprintf(os.Stderr, "Error: %s", msg)
 		os.Exit(1)
 	}
 }
 
 func check(err error) {
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "\n  Error: %s\n\n", err)
+		fmt.Fprintf(os.Stderr, "Error: %s", err)
 		os.Exit(1)
 	}
 }
@@ -120,10 +123,10 @@ func printLogMSG(events []any) error {
 	return printJSON(ret)
 }
 
-func execCount(query string, from string, to string) {
+func execCount(ctx context.Context, query string, from string, to string) {
 	c := search.New(*account, *token)
 	q := search.NewQuery(query).Size(1).From(from).To(to)
-	res, err := c.Fetch(*q)
+	res, err := c.Fetch(ctx, *q)
 	for {
 		select {
 		case r := <-res:
@@ -146,12 +149,20 @@ func printRes(res search.Response) {
 	}
 }
 
-func sendQuery(query string, size int, from string, to string, maxPages int, concurrency int) {
+func sendQuery(
+	ctx context.Context,
+	query string,
+	size int,
+	from string,
+	to string,
+	maxPages int,
+	concurrency int,
+) {
 	doneChan := make(chan error)
 
 	c := search.New(*account, *token).SetConcurrency(concurrency)
 	q := search.NewQuery(query).Size(size).From(from).To(to).MaxPage(maxPages)
-	res, err := c.Fetch(*q)
+	res, err := c.Fetch(ctx, *q)
 
 	go func() {
 		if e := <-err; e != nil {
@@ -161,6 +172,9 @@ func sendQuery(query string, size int, from string, to string, maxPages int, con
 
 	go func() {
 		for i := range res {
+			if ctx.Err() != nil {
+				break
+			}
 			printRes(i)
 		}
 		doneChan <- nil
@@ -188,8 +202,20 @@ func warnInvalidFlagPlacement(args []string) {
 
 func warnHighConcurrency(concurrency int) {
 	if concurrency > 3 {
-		fmt.Fprintf(os.Stderr, " Warning: High concurrency (%d) may lead to rate limiting or temporary blocking by Loggly. Consider reducing the concurrency level.\n", concurrency)
+		fmt.Fprintf(os.Stderr, "Warning: High concurrency (%d) may lead to rate limiting or temporary blocking by Loggly. Consider reducing the concurrency level.\n", concurrency)
 	}
+}
+
+func contextWithInterrupt(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		cancel()
+	}()
+	return ctx, cancel
 }
 
 func main() {
@@ -201,6 +227,9 @@ func main() {
 		return
 	}
 
+	ctx, cancel := contextWithInterrupt(context.Background())
+	defer cancel()
+
 	assert(*account != "", "-account required")
 	assert(*token != "", "-token required")
 
@@ -210,9 +239,9 @@ func main() {
 	query := strings.Join(args, " ")
 
 	if *count {
-		execCount(query, *from, *to)
+		execCount(ctx, query, *from, *to)
 		return
 	}
 
-	sendQuery(query, *size, *from, *to, *maxPages, *concurrency)
+	sendQuery(ctx, query, *size, *from, *to, *maxPages, *concurrency)
 }
