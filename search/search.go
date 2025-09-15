@@ -15,10 +15,13 @@ import (
 // Client Loggly search client with user credentials, loggly
 // does not seem to support tokens right now.
 type Client struct {
-	Token       string
-	Account     string
-	Endpoint    string
-	concurrency int
+	Token   string
+	Account string
+
+	// API
+	endpoint string
+	// Number of concurrent requests when fetching multiple pages.
+	concurrency atomic.Int64
 }
 
 // Response Search response with total events, page number
@@ -34,7 +37,7 @@ func New(account string, token string) *Client {
 	c := &Client{
 		Account:  account,
 		Token:    token,
-		Endpoint: "loggly.com/apiv2",
+		endpoint: "loggly.com/apiv2",
 	}
 
 	return c
@@ -44,13 +47,13 @@ func (c *Client) SetConcurrency(n int) *Client {
 	if n < 1 {
 		n = 1
 	}
-	c.concurrency = n
+	c.concurrency.Store(int64(n))
 	return c
 }
 
 // URL Return the base api url.
 func (c *Client) URL() string {
-	return fmt.Sprintf("https://%s.%s", c.Account, c.Endpoint)
+	return fmt.Sprintf("https://%s.%s", c.Account, c.endpoint)
 }
 
 // Get the given path.
@@ -60,7 +63,7 @@ func (c *Client) Get(path string) (*http.Response, error) {
 		return nil, err
 	}
 
-	r.Header.Add("Authorization", fmt.Sprintf("bearer %s", c.Token))
+	r.Header.Add("Authorization", fmt.Sprintf("Bearer %s", c.Token))
 	r.Header.Set("User-Agent", "go-loggly-cli/1 author/Ajnasz")
 	client := &http.Client{}
 	return client.Do(r)
@@ -77,18 +80,20 @@ func (c *Client) GetJSON(path string) (j *simplejson.Json, err error) {
 	defer res.Body.Close()
 
 	if res.StatusCode >= 400 {
-		body, _ := io.ReadAll(res.Body)
+		body, err := io.ReadAll(res.Body)
+		if err != nil {
+			body = []byte(err.Error())
+		}
 		return nil, fmt.Errorf("go-loggly-search: %q, %s", res.Status, body)
 	}
 
 	body, err := io.ReadAll(res.Body)
 
 	if err != nil {
-		return
+		return nil, err
 	}
 
-	j, err = simplejson.NewJson(body)
-	return
+	return simplejson.NewJson(body)
 }
 
 // CreateSearch Create a new search instance, loggly requires that a search
@@ -124,67 +129,94 @@ func (c *Client) Search(j *simplejson.Json, page int) (*Response, error) {
 
 }
 
-// Fetch Search response with total events, page number
-// and the events array.
-func (c *Client) Fetch(q Query) (chan Response, chan error) {
-	resChan := make(chan Response)
-	errChan := make(chan error)
+func (c *Client) fetchAndStorePage(
+	j *simplejson.Json,
+	responsesStore *orderedbuffer.OrderedBuffer[Response],
+	page int,
+) (*Response, error) {
+	res, err := c.Search(j, page)
+	if err != nil {
+		return nil, err
+	}
 
-	concurrent := min(q.maxPages, c.concurrency)
+	if res != nil {
+		responsesStore.Store(page, *res)
+	}
 
+	return res, nil
+}
+
+func shouldStopFetching(err error, res *Response, pageSize int) bool {
+	if err != nil {
+		return true
+	}
+
+	if res == nil || len(res.Events) < pageSize {
+		return true
+	}
+
+	return false
+}
+
+func (c *Client) fetchAllPages(q Query, resChan chan Response, errChan chan error) {
+	defer close(resChan)
+	defer close(errChan)
+	j, err := c.CreateSearch(q.String())
+
+	if err != nil {
+		errChan <- err
+		return
+	}
+
+	concurrent := min(q.maxPages, int(c.concurrency.Load()))
 	pool := make(chan struct{}, concurrent)
 
 	var page atomic.Int64
 	page.Store(-1)
-	go func() {
-		defer close(resChan)
-		defer close(errChan)
-		j, err := c.CreateSearch(q.String())
 
-		if err != nil {
-			errChan <- err
-			return
-		}
+	var wg sync.WaitGroup
+	var hasMore atomic.Bool
+	hasMore.Store(true)
+	responsesStore := orderedbuffer.NewOrderedBuffer(resChan)
 
-		var wg sync.WaitGroup
-		var hasMore atomic.Bool
-		hasMore.Store(true)
-		var lastPrintedPage atomic.Int32
-		lastPrintedPage.Store(-1)
-		responsesStore := orderedbuffer.NewOrderedBuffer(resChan)
-		for {
-			pool <- struct{}{}
-			wg.Add(1)
-			go func(page int) {
-				defer wg.Done()
-				defer func() { <-pool }()
+	for {
+		pool <- struct{}{}
+		wg.Add(1)
+		go func(page int) {
+			defer wg.Done()
+			defer func() { <-pool }()
 
-				res, err := c.Search(j, page)
+			res, err := c.fetchAndStorePage(j, responsesStore, page)
+
+			if shouldStopFetching(err, res, q.size) {
+				hasMore.Store(false)
 				if err != nil {
 					errChan <- err
-					hasMore.Store(false)
-					return
 				}
-
-				if res != nil {
-					responsesStore.Store(page, *res)
-
-					if len(res.Events) < q.size {
-						hasMore.Store(false)
-						return
-					}
-				} else {
-					hasMore.Store(false)
-					return
-				}
-			}(int(page.Add(1)))
-			if int(page.Load()) >= q.maxPages || !hasMore.Load() {
-				break
 			}
-		}
+		}(int(page.Add(1)))
 
-		wg.Wait()
-	}()
+		shouldBreak := int(page.Load()) >= q.maxPages || !hasMore.Load()
+
+		if shouldBreak {
+			break
+		}
+	}
+
+	wg.Wait()
+}
+
+// Fetch Search response with total events, page number
+// and the events array.
+// Fetch will fetch all pages up to maxPages in the Query
+// and return the results in order on the response channel.
+// Errors are sent on the error channel.
+// Both channels are closed when all fetching is done or an error occurs.
+func (c *Client) Fetch(q Query) (chan Response, chan error) {
+	resChan := make(chan Response)
+	errChan := make(chan error)
+
+	go c.fetchAllPages(q, resChan, errChan)
 
 	return resChan, errChan
 }
