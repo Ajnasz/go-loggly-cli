@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"sync/atomic"
 
@@ -115,7 +116,11 @@ func (c *Client) GetEvents(ctx context.Context, params string) (*simplejson.Json
 func (c *Client) Search(ctx context.Context, j *simplejson.Json, page int) (*Response, error) {
 	id := j.GetPath("rsid", "id").MustString()
 
-	j, err := c.GetEvents(ctx, "rsid="+id+"&page="+strconv.Itoa(page))
+	qs := url.Values{}
+	qs.Set("rsid", id)
+	qs.Set("page", strconv.Itoa(page))
+
+	j, err := c.GetEvents(ctx, qs.Encode())
 
 	if err != nil {
 		return nil, err
