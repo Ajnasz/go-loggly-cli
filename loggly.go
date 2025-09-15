@@ -13,12 +13,7 @@ import (
 	"github.com/Ajnasz/go-loggly-cli/search"
 )
 
-// Version is the version string
 var version string
-
-//
-// Usage information.
-//
 
 const usage = `
   Usage: loggly [options] [query...]
@@ -33,7 +28,7 @@ const usage = `
     -count            print total event count
     -all              print the entire loggly event instead of just the message
     -maxPages <count> maximum number of pages to query [3]
-    -concurrency <count> number of concurrent page fetchers [3]
+    -concurrency <count> number of concurrent page fetchers [3]. If loggly returns with http error consider reducing this value.
     -version          print version information
 
   Operators:
@@ -202,7 +197,7 @@ func warnInvalidFlagPlacement(args []string) {
 
 func warnHighConcurrency(concurrency int) {
 	if concurrency > 3 {
-		fmt.Fprintf(os.Stderr, "Warning: High concurrency (%d) may lead to rate limiting or temporary blocking by Loggly. Consider reducing the concurrency level.\n", concurrency)
+		fmt.Fprintf(os.Stderr, "Warning: High concurrency (%d) may lead to rate limiting or temporary blocking by Loggly. If loggly returns with error, consider reducing the concurrency level.\n", concurrency)
 	}
 }
 

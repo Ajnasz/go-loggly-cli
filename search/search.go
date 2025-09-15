@@ -6,12 +6,12 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"sync"
 	"sync/atomic"
 
 	"github.com/Ajnasz/go-loggly-cli/orderedbuffer"
 	"github.com/Ajnasz/go-loggly-cli/semaphore"
 	"github.com/bitly/go-simplejson"
+	"golang.org/x/sync/errgroup"
 )
 
 // Client Loggly search client with user credentials, loggly
@@ -161,14 +161,12 @@ func shouldStopFetching(err error, res *Response, pageSize int) bool {
 	return false
 }
 
-func (c *Client) fetchAllPages(ctx context.Context, q Query, resChan chan Response, errChan chan error) {
+func (c *Client) fetchAllPages(ctx context.Context, q Query, resChan chan Response) error {
 	defer close(resChan)
-	defer close(errChan)
 	j, err := c.CreateSearch(ctx, q.String())
 
 	if err != nil {
-		errChan <- err
-		return
+		return err
 	}
 
 	concurrent := min(q.maxPages, c.concurrency.Load())
@@ -177,37 +175,27 @@ func (c *Client) fetchAllPages(ctx context.Context, q Query, resChan chan Respon
 	var page atomic.Int64
 	page.Store(-1)
 
-	var wg sync.WaitGroup
 	var hasMore atomic.Bool
 	hasMore.Store(true)
 	responsesStore := orderedbuffer.NewOrderedBuffer(resChan)
 
+	errg, ctx := errgroup.WithContext(ctx)
+
 	for {
 		if err := sem.Acquire(ctx); err != nil {
-			errChan <- err
-			break
+			return err
 		}
-
-		wg.Add(1)
-		go func(page int) {
-			defer wg.Done()
+		p := int(page.Add(1))
+		errg.Go(func() error {
 			defer sem.Release()
 
-			if ctx.Err() != nil {
-				errChan <- ctx.Err()
-				hasMore.Store(false)
-				return
-			}
-
-			res, err := c.fetchAndStorePage(ctx, j, responsesStore, page)
+			res, err := c.fetchAndStorePage(ctx, j, responsesStore, p)
 
 			if shouldStopFetching(err, res, q.size) {
 				hasMore.Store(false)
-				if err != nil {
-					errChan <- err
-				}
 			}
-		}(int(page.Add(1)))
+			return err
+		})
 
 		shouldBreak := page.Load() >= q.maxPages || !hasMore.Load()
 
@@ -216,7 +204,7 @@ func (c *Client) fetchAllPages(ctx context.Context, q Query, resChan chan Respon
 		}
 	}
 
-	wg.Wait()
+	return errg.Wait()
 }
 
 // Fetch Search response with total events, page number
@@ -229,7 +217,13 @@ func (c *Client) Fetch(ctx context.Context, q Query) (chan Response, chan error)
 	resChan := make(chan Response)
 	errChan := make(chan error)
 
-	go c.fetchAllPages(ctx, q, resChan, errChan)
+	go func() {
+		defer close(errChan)
+		err := c.fetchAllPages(ctx, q, resChan)
+		if err != nil {
+			errChan <- err
+		}
+	}()
 
 	return resChan, errChan
 }
