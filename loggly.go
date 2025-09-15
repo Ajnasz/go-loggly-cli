@@ -66,7 +66,7 @@ var count = flags.Bool("count", false, "")
 var concurrency = flags.Int("concurrency", 3, "")
 var versionQuery = flags.Bool("version", false, "")
 var account = flags.String("account", "", "")
-var maxPages = flags.Int("maxPages", 3, "")
+var maxPages = flags.Int64("maxPages", 3, "")
 var token = flags.String("token", "", "")
 var size = flags.Int("size", 100, "")
 var from = flags.String("from", "-24h", "")
@@ -155,7 +155,7 @@ func sendQuery(
 	size int,
 	from string,
 	to string,
-	maxPages int,
+	maxPages int64,
 	concurrency int,
 ) {
 	doneChan := make(chan error)

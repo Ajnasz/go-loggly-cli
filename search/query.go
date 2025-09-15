@@ -12,7 +12,7 @@ type Query struct {
 	until    string
 	order    string
 	size     int
-	maxPages int
+	maxPages int64
 }
 
 // Create a new query
@@ -50,7 +50,7 @@ func (q *Query) From(str string) *Query {
 }
 
 // MaxPage sets the max page
-func (q *Query) MaxPage(maxPages int) *Query {
+func (q *Query) MaxPage(maxPages int64) *Query {
 	q.maxPages = maxPages
 	return q
 }

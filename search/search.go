@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 
 	"github.com/Ajnasz/go-loggly-cli/orderedbuffer"
+	"github.com/Ajnasz/go-loggly-cli/semaphore"
 	"github.com/bitly/go-simplejson"
 )
 
@@ -170,8 +171,8 @@ func (c *Client) fetchAllPages(ctx context.Context, q Query, resChan chan Respon
 		return
 	}
 
-	concurrent := min(q.maxPages, int(c.concurrency.Load()))
-	pool := make(chan struct{}, concurrent)
+	concurrent := min(q.maxPages, c.concurrency.Load())
+	sem := semaphore.New(concurrent)
 
 	var page atomic.Int64
 	page.Store(-1)
@@ -182,11 +183,15 @@ func (c *Client) fetchAllPages(ctx context.Context, q Query, resChan chan Respon
 	responsesStore := orderedbuffer.NewOrderedBuffer(resChan)
 
 	for {
-		pool <- struct{}{}
+		if err := sem.Acquire(ctx); err != nil {
+			errChan <- err
+			break
+		}
+
 		wg.Add(1)
 		go func(page int) {
 			defer wg.Done()
-			defer func() { <-pool }()
+			defer sem.Release()
 
 			if ctx.Err() != nil {
 				errChan <- ctx.Err()
@@ -204,7 +209,7 @@ func (c *Client) fetchAllPages(ctx context.Context, q Query, resChan chan Respon
 			}
 		}(int(page.Add(1)))
 
-		shouldBreak := int(page.Load()) >= q.maxPages || !hasMore.Load()
+		shouldBreak := page.Load() >= q.maxPages || !hasMore.Load()
 
 		if shouldBreak {
 			break
