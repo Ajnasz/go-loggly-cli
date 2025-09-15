@@ -58,8 +58,8 @@ func (c *Client) URL() string {
 }
 
 // Get the given path.
-func (c *Client) Get(path string) (*http.Response, error) {
-	r, err := http.NewRequest(http.MethodGet, c.URL()+path, nil)
+func (c *Client) Get(ctx context.Context, path string) (*http.Response, error) {
+	r, err := http.NewRequestWithContext(ctx, http.MethodGet, c.URL()+path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -71,8 +71,8 @@ func (c *Client) Get(path string) (*http.Response, error) {
 }
 
 // GetJSON from the given path.
-func (c *Client) GetJSON(path string) (j *simplejson.Json, err error) {
-	res, err := c.Get(path)
+func (c *Client) GetJSON(ctx context.Context, path string) (j *simplejson.Json, err error) {
+	res, err := c.Get(ctx, path)
 
 	if err != nil {
 		return
@@ -99,22 +99,22 @@ func (c *Client) GetJSON(path string) (j *simplejson.Json, err error) {
 
 // CreateSearch Create a new search instance, loggly requires that a search
 // is made before you may fetch events from it with a second call.
-func (c *Client) CreateSearch(params string) (*simplejson.Json, error) {
-	return c.GetJSON("/search?" + params)
+func (c *Client) CreateSearch(ctx context.Context, params string) (*simplejson.Json, error) {
+	return c.GetJSON(ctx, "/search?"+params)
 }
 
 // GetEvents must be called after CreateSearch() with the
 // correct rsid to reference the search.
-func (c *Client) GetEvents(params string) (*simplejson.Json, error) {
-	return c.GetJSON("/events?" + params)
+func (c *Client) GetEvents(ctx context.Context, params string) (*simplejson.Json, error) {
+	return c.GetJSON(ctx, "/events?"+params)
 }
 
 // Search response with total events, page number
 // and the events array.
-func (c *Client) Search(j *simplejson.Json, page int) (*Response, error) {
+func (c *Client) Search(ctx context.Context, j *simplejson.Json, page int) (*Response, error) {
 	id := j.GetPath("rsid", "id").MustString()
 
-	j, err := c.GetEvents("rsid=" + id + "&page=" + strconv.Itoa(page))
+	j, err := c.GetEvents(ctx, "rsid="+id+"&page="+strconv.Itoa(page))
 
 	if err != nil {
 		return nil, err
@@ -131,11 +131,12 @@ func (c *Client) Search(j *simplejson.Json, page int) (*Response, error) {
 }
 
 func (c *Client) fetchAndStorePage(
+	ctx context.Context,
 	j *simplejson.Json,
 	responsesStore *orderedbuffer.OrderedBuffer[Response],
 	page int,
 ) (*Response, error) {
-	res, err := c.Search(j, page)
+	res, err := c.Search(ctx, j, page)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +163,7 @@ func shouldStopFetching(err error, res *Response, pageSize int) bool {
 func (c *Client) fetchAllPages(ctx context.Context, q Query, resChan chan Response, errChan chan error) {
 	defer close(resChan)
 	defer close(errChan)
-	j, err := c.CreateSearch(q.String())
+	j, err := c.CreateSearch(ctx, q.String())
 
 	if err != nil {
 		errChan <- err
@@ -193,7 +194,7 @@ func (c *Client) fetchAllPages(ctx context.Context, q Query, resChan chan Respon
 				return
 			}
 
-			res, err := c.fetchAndStorePage(j, responsesStore, page)
+			res, err := c.fetchAndStorePage(ctx, j, responsesStore, page)
 
 			if shouldStopFetching(err, res, q.size) {
 				hasMore.Store(false)
