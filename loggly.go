@@ -122,7 +122,8 @@ func printLogMSG(events []any) error {
 
 func execCount(query string, from string, to string) {
 	c := search.New(*account, *token)
-	res, err := c.Query(query).Size(1).From(from).To(to).Fetch()
+	q := search.NewQuery(query).Size(1).From(from).To(to)
+	res, err := c.Fetch(*q)
 	for {
 		select {
 		case r := <-res:
@@ -149,7 +150,8 @@ func sendQuery(query string, size int, from string, to string, maxPages int, con
 	doneChan := make(chan error)
 
 	c := search.New(*account, *token).SetConcurrency(concurrency)
-	res, err := c.Query(query).Size(size).From(from).To(to).MaxPage(maxPages).Fetch()
+	q := search.NewQuery(query).Size(size).From(from).To(to).MaxPage(maxPages)
+	res, err := c.Fetch(*q)
 
 	go func() {
 		if e := <-err; e != nil {
@@ -180,7 +182,7 @@ func warnInvalidFlagPlacement(args []string) {
 	}
 
 	if len(invalidFlags) > 0 {
-		fmt.Fprintf(os.Stderr, " Warning: Possible invalid flag placement. Flags must be specified before the query. Ignoring flags: %s\n", strings.Join(invalidFlags, ", "))
+		fmt.Fprintf(os.Stderr, "Warning: Possible invalid flag placement. Flags must be specified before the query. Ignoring flags: %s\n", strings.Join(invalidFlags, ", "))
 	}
 }
 

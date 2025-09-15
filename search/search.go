@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -28,29 +27,6 @@ type Response struct {
 	Total  int64
 	Page   int64
 	Events []any
-}
-
-// Query builder struct
-type Query struct {
-	client   *Client
-	query    string
-	from     string
-	until    string
-	order    string
-	size     int
-	maxPages int
-}
-
-// Create a new query
-func newQuery(c *Client, str string) *Query {
-	return &Query{
-		client: c,
-		query:  str,
-		from:   "-24h",
-		until:  "now",
-		order:  "desc",
-		size:   100,
-	}
 }
 
 // New Create a new loggly search client with credentials.
@@ -148,59 +124,13 @@ func (c *Client) Search(j *simplejson.Json, page int) (*Response, error) {
 
 }
 
-// Query Create a new search query using the fluent api.
-func (c *Client) Query(str string) *Query {
-	return newQuery(c, str)
-}
-
-// Return the encoded query-string.
-func (q *Query) String() string {
-	qs := url.Values{}
-	qs.Set("q", q.query)
-	qs.Set("size", strconv.Itoa(q.size))
-	qs.Set("from", q.from)
-	qs.Set("until", q.until)
-	qs.Set("order", q.order)
-	return qs.Encode()
-}
-
-// Size Set response size.
-func (q *Query) Size(n int) *Query {
-	q.size = n
-	return q
-}
-
-// From Set from time.
-func (q *Query) From(str string) *Query {
-	q.from = str
-	return q
-}
-
-// MaxPage sets the max page
-func (q *Query) MaxPage(maxPages int) *Query {
-	q.maxPages = maxPages
-	return q
-}
-
-// Until Set until time.
-func (q *Query) Until(str string) *Query {
-	q.until = str
-	return q
-}
-
-// To Set until time.
-func (q *Query) To(str string) *Query {
-	q.until = str
-	return q
-}
-
 // Fetch Search response with total events, page number
 // and the events array.
-func (q *Query) Fetch() (chan Response, chan error) {
+func (c *Client) Fetch(q Query) (chan Response, chan error) {
 	resChan := make(chan Response)
 	errChan := make(chan error)
 
-	concurrent := min(q.maxPages, q.client.concurrency)
+	concurrent := min(q.maxPages, c.concurrency)
 
 	pool := make(chan struct{}, concurrent)
 
@@ -209,7 +139,7 @@ func (q *Query) Fetch() (chan Response, chan error) {
 	go func() {
 		defer close(resChan)
 		defer close(errChan)
-		j, err := q.client.CreateSearch(q.String())
+		j, err := c.CreateSearch(q.String())
 
 		if err != nil {
 			errChan <- err
@@ -229,7 +159,7 @@ func (q *Query) Fetch() (chan Response, chan error) {
 				defer wg.Done()
 				defer func() { <-pool }()
 
-				res, err := q.client.Search(j, page)
+				res, err := c.Search(j, page)
 				if err != nil {
 					errChan <- err
 					hasMore.Store(false)
