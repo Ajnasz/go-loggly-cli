@@ -212,8 +212,12 @@ func contextWithInterrupt(ctx context.Context) (context.Context, context.CancelF
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		<-sigChan
-		cancel()
+		select {
+		case <-ctx.Done():
+			return
+		case <-sigChan:
+			cancel()
+		}
 	}()
 	return ctx, cancel
 }
