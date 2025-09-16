@@ -34,9 +34,26 @@ jobs:
         run: |
           ./build.sh build
 
-      - run: |
-          set -x
-          tag_name="${GITHUB_REF##*/}"
-          gh release create "$tag_name" build/*
+      - name: Generate changelog
+        id: changelog
+        run: |
+          # Get the previous tag (if any)
+          previous_tag=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
+          if [ -n "$previous_tag" ]; then
+            log=$(git log --pretty=format:"%s" "$previous_tag"..HEAD)
+          else
+            log=$(git log --pretty=format:"%s")
+          fi
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$log" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release (draft)
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: ${{ github.ref_name }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          draft: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
