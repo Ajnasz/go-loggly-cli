@@ -124,6 +124,9 @@ func execCount(ctx context.Context, query string, from string, to string) {
 	res, err := c.Fetch(ctx, *q)
 	for {
 		select {
+		case <-ctx.Done():
+			check(ctx.Err())
+			return
 		case r := <-res:
 			fmt.Println(r.Total)
 			return
@@ -137,10 +140,11 @@ func execCount(ctx context.Context, query string, from string, to string) {
 func printRes(res search.Response) {
 	if *allMsg {
 		check(printJSON(res.Events))
-	} else {
-		if err := printLogMSG(res.Events); err != nil {
-			fmt.Fprintf(os.Stderr, "Invalid JSON in the 'logmsg' field. Consider to filter the messages, or use the -all flag and parse the message yourself.\n\n%s", err.Error())
-		}
+		return
+	}
+
+	if err := printLogMSG(res.Events); err != nil {
+		fmt.Fprintf(os.Stderr, "Invalid JSON in the 'logmsg' field. Consider to filter the messages, or use the -all flag and parse the message yourself.\n\n%s", err.Error())
 	}
 }
 
@@ -183,9 +187,10 @@ func warnInvalidFlagPlacement(args []string) {
 	flags.VisitAll(func(f *flag.Flag) {
 		currentFlags["-"+f.Name] = true
 	})
+
 	var invalidFlags []string
 	for _, arg := range args {
-		if strings.HasPrefix(arg, "-") && currentFlags[arg] {
+		if currentFlags[arg] {
 			invalidFlags = append(invalidFlags, arg)
 		}
 	}
