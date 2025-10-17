@@ -18,8 +18,6 @@ var version string
 const usage = `
   Usage: loggly [options] [query...]
 
-  Commands:
-    interactive   Launch interactive query builder (alias: i)
 
   Options:
 
@@ -32,6 +30,7 @@ const usage = `
     -all              print the entire loggly event instead of just the message
     -maxPages <count> maximum number of pages to query [3]
     -concurrency <count> number of concurrent page fetchers [3]. If loggly returns with http error consider reducing this value.
+    -tui              launch interactive terminal UI
     -version          print version information
 
   Operators:
