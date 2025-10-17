@@ -134,13 +134,14 @@ func (i valueItem) Title() string       { return i.value }
 func (i valueItem) Description() string { return fmt.Sprintf("%d occurrences", i.count) }
 
 type model struct {
-	ctx      context.Context
-	account  string
-	token    string
-	from     string
-	to       string
-	size     int
-	maxPages int64
+	ctx         context.Context
+	account     string
+	token       string
+	from        string
+	concurrency int
+	to          string
+	size        int
+	maxPages    int64
 
 	queryInput  textinput.Model
 	fieldsList  list.Model
@@ -196,7 +197,7 @@ var (
 			Foreground(lipgloss.Color("241"))
 )
 
-func initialModel(ctx context.Context, account, token string, size int, maxPages int64, query, from, to string) model {
+func initialModel(ctx context.Context, config Config, query string) model {
 	ti := textinput.New()
 	ti.Placeholder = "Enter your Loggly query..."
 	ti.Focus()
@@ -228,12 +229,13 @@ func initialModel(ctx context.Context, account, token string, size int, maxPages
 
 	return model{
 		ctx:           ctx,
-		account:       account,
-		token:         token,
-		size:          size,
-		maxPages:      maxPages,
-		from:          from,
-		to:            to,
+		account:       config.Account,
+		token:         config.Token,
+		size:          config.Size,
+		maxPages:      config.MaxPages,
+		from:          config.From,
+		to:            config.To,
+		concurrency:   config.Concurrency,
 		queryInput:    ti,
 		fieldsList:    fieldsList,
 		valuesList:    valuesList,
@@ -512,10 +514,10 @@ func (m *model) executeQuery() tea.Cmd {
 	return func() tea.Msg {
 		query := m.queryInput.Value()
 		if query == "" {
-			query = "*"
+			return resultsMsg{results: []map[string]any{}}
 		}
 
-		c := search.New(m.account, m.token).SetConcurrency(1)
+		c := search.New(m.account, m.token).SetConcurrency(m.concurrency)
 		q := search.NewQuery(query).Size(m.size).From(m.from).To(m.to).MaxPage(m.maxPages)
 		resChan, errChan := c.Fetch(m.ctx, *q)
 
@@ -722,9 +724,9 @@ func (m *model) showDetailView(item resultItem) {
 	m.detailView.SetContent(string(data))
 }
 
-func runInteractive(ctx context.Context, account, token string, size int, maxPages int64, query, from, to string) {
+func runInteractive(ctx context.Context, config Config, query string) {
 	p := tea.NewProgram(
-		initialModel(ctx, account, token, size, maxPages, query, from, to),
+		initialModel(ctx, config, query),
 		tea.WithAltScreen(),
 	)
 

@@ -57,19 +57,17 @@ const usage = `
     /Black(Berry)?/
 `
 
-// Command options.
-var flags = flag.NewFlagSet("loggly", flag.ExitOnError)
-var count = flags.Bool("count", false, "")
-var concurrency = flags.Int("concurrency", 3, "")
-var versionQuery = flags.Bool("version", false, "")
-var tui = flags.Bool("tui", false, "")
-var account = flags.String("account", "", "")
-var maxPages = flags.Int64("maxPages", 3, "")
-var token = flags.String("token", "", "")
-var size = flags.Int("size", 100, "")
-var from = flags.String("from", "-24h", "")
-var to = flags.String("to", "now", "")
-var allMsg = flags.Bool("all", false, "")
+type Config struct {
+	Account     string
+	Token       string
+	Size        int
+	From        string
+	To          string
+	Count       bool
+	AllMsg      bool
+	MaxPages    int64
+	Concurrency int
+}
 
 // Print usage and exit.
 func printUsage() {
@@ -121,9 +119,9 @@ func printLogMSG(events []any) error {
 	return printJSON(ret)
 }
 
-func execCount(ctx context.Context, query string, from string, to string) {
-	c := search.New(*account, *token)
-	q := search.NewQuery(query).Size(1).From(from).To(to)
+func execCount(ctx context.Context, config Config, query string) {
+	c := search.New(config.Account, config.Token)
+	q := search.NewQuery(query).Size(1).From(config.From).To(config.To)
 	res, err := c.Fetch(ctx, *q)
 	for {
 		select {
@@ -140,8 +138,8 @@ func execCount(ctx context.Context, query string, from string, to string) {
 	}
 }
 
-func printRes(res search.Response) {
-	if *allMsg {
+func printRes(allMsg bool, res search.Response) {
+	if allMsg {
 		check(printJSON(res.Events))
 		return
 	}
@@ -153,15 +151,11 @@ func printRes(res search.Response) {
 
 func sendQuery(
 	ctx context.Context,
+	config Config,
 	query string,
-	size int,
-	from string,
-	to string,
-	maxPages int64,
-	concurrency int,
 ) {
-	c := search.New(*account, *token).SetConcurrency(concurrency)
-	q := search.NewQuery(query).Size(size).From(from).To(to).MaxPage(maxPages)
+	c := search.New(config.Account, config.Token).SetConcurrency(config.Concurrency)
+	q := search.NewQuery(query).Size(config.Size).From(config.From).To(config.To).MaxPage(config.MaxPages)
 	res, err := c.Fetch(ctx, *q)
 
 	for {
@@ -170,7 +164,7 @@ func sendQuery(
 			check(ctx.Err())
 			return
 		case r := <-res:
-			printRes(r)
+			printRes(config.AllMsg, r)
 		case e := <-err:
 			check(e)
 			return
@@ -179,7 +173,7 @@ func sendQuery(
 
 }
 
-func warnInvalidFlagPlacement(args []string) {
+func warnInvalidFlagPlacement(flags *flag.FlagSet, args []string) {
 	currentFlags := make(map[string]bool)
 	flags.VisitAll(func(f *flag.Flag) {
 		currentFlags["-"+f.Name] = true
@@ -220,6 +214,19 @@ func contextWithInterrupt(ctx context.Context) (context.Context, context.CancelF
 }
 
 func main() {
+	// Command options.
+	var flags = flag.NewFlagSet("loggly", flag.ExitOnError)
+	var count = flags.Bool("count", false, "")
+	var concurrency = flags.Int("concurrency", 3, "")
+	var versionQuery = flags.Bool("version", false, "")
+	var tui = flags.Bool("tui", false, "")
+	var account = flags.String("account", "", "")
+	var maxPages = flags.Int64("maxPages", 3, "")
+	var token = flags.String("token", "", "")
+	var size = flags.Int("size", 100, "")
+	var from = flags.String("from", "-24h", "")
+	var to = flags.String("to", "now", "")
+	var allMsg = flags.Bool("all", false, "")
 	flags.Usage = printUsage
 	flags.Parse(os.Args[1:])
 
@@ -229,7 +236,7 @@ func main() {
 	}
 
 	args := flags.Args()
-	warnInvalidFlagPlacement(args)
+	warnInvalidFlagPlacement(flags, args)
 	warnHighConcurrency(*concurrency)
 	query := strings.Join(args, " ")
 	ctx, cancel := contextWithInterrupt(context.Background())
@@ -238,15 +245,27 @@ func main() {
 	assert(*account != "", "-account required")
 	assert(*token != "", "-token required")
 
+	config := Config{
+		Account:     *account,
+		Token:       *token,
+		Size:        *size,
+		From:        *from,
+		To:          *to,
+		Count:       *count,
+		AllMsg:      *allMsg,
+		MaxPages:    *maxPages,
+		Concurrency: *concurrency,
+	}
+
 	if *tui {
-		runInteractive(ctx, *account, *token, *size, *maxPages, query, *from, *to)
+		runInteractive(ctx, config, query)
 		return
 	}
 
 	if *count {
-		execCount(ctx, query, *from, *to)
+		execCount(ctx, config, query)
 		return
 	}
 
-	sendQuery(ctx, query, *size, *from, *to, *maxPages, *concurrency)
+	sendQuery(ctx, config, query)
 }
