@@ -18,6 +18,9 @@ var version string
 const usage = `
   Usage: loggly [options] [query...]
 
+  Commands:
+    interactive   Launch interactive query builder (alias: i)
+
   Options:
 
     -account <name>   account name
@@ -60,6 +63,7 @@ var flags = flag.NewFlagSet("loggly", flag.ExitOnError)
 var count = flags.Bool("count", false, "")
 var concurrency = flags.Int("concurrency", 3, "")
 var versionQuery = flags.Bool("version", false, "")
+var tui = flags.Bool("tui", false, "")
 var account = flags.String("account", "", "")
 var maxPages = flags.Int64("maxPages", 3, "")
 var token = flags.String("token", "", "")
@@ -157,29 +161,23 @@ func sendQuery(
 	maxPages int64,
 	concurrency int,
 ) {
-	doneChan := make(chan error)
-
 	c := search.New(*account, *token).SetConcurrency(concurrency)
 	q := search.NewQuery(query).Size(size).From(from).To(to).MaxPage(maxPages)
 	res, err := c.Fetch(ctx, *q)
 
-	go func() {
-		if e := <-err; e != nil {
-			doneChan <- e
+	for {
+		select {
+		case <-ctx.Done():
+			check(ctx.Err())
+			return
+		case r := <-res:
+			printRes(r)
+		case e := <-err:
+			check(e)
+			return
 		}
-	}()
+	}
 
-	go func() {
-		for i := range res {
-			if ctx.Err() != nil {
-				break
-			}
-			printRes(i)
-		}
-		doneChan <- nil
-	}()
-
-	check(<-doneChan)
 }
 
 func warnInvalidFlagPlacement(args []string) {
@@ -231,16 +229,20 @@ func main() {
 		return
 	}
 
+	args := flags.Args()
+	warnInvalidFlagPlacement(args)
+	warnHighConcurrency(*concurrency)
+	query := strings.Join(args, " ")
 	ctx, cancel := contextWithInterrupt(context.Background())
 	defer cancel()
 
 	assert(*account != "", "-account required")
 	assert(*token != "", "-token required")
 
-	args := flags.Args()
-	warnInvalidFlagPlacement(args)
-	warnHighConcurrency(*concurrency)
-	query := strings.Join(args, " ")
+	if *tui {
+		runInteractive(ctx, *account, query, *token, *from, *to)
+		return
+	}
 
 	if *count {
 		execCount(ctx, query, *from, *to)
