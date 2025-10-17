@@ -11,6 +11,7 @@ import (
 
 	"github.com/Ajnasz/go-loggly-cli/search"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
@@ -146,7 +147,10 @@ type model struct {
 	valuesList  list.Model
 	resultsList list.Model
 	detailView  viewport.Model
+	spinner     spinner.Model
 	debugView   string
+
+	selectedField fieldItem
 
 	currentPane pane
 	width       int
@@ -197,7 +201,6 @@ func initialModel(ctx context.Context, account, token string, size int, maxPages
 	ti.Placeholder = "Enter your Loggly query..."
 	ti.Focus()
 	ti.CharLimit = 500
-	ti.Width = 50
 	ti.SetValue(query)
 
 	fieldsList := list.New([]list.Item{}, list.NewDefaultDelegate(), 20, 20)
@@ -236,6 +239,7 @@ func initialModel(ctx context.Context, account, token string, size int, maxPages
 		valuesList:    valuesList,
 		resultsList:   resultsList,
 		detailView:    detailView,
+		spinner:       spinner.New(),
 		debugView:     "",
 		currentPane:   queryPane,
 		allFields:     make(map[string]int),
@@ -246,7 +250,7 @@ func initialModel(ctx context.Context, account, token string, size int, maxPages
 }
 
 func (m model) Init() tea.Cmd {
-	return textinput.Blink
+	return tea.Batch(textinput.Blink, m.spinner.Tick)
 }
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -290,14 +294,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loading = true
 				return m, m.executeQuery()
 			}
+
 			if m.currentPane == fieldsPane {
 				cmd := m.selectField()
 				return m, cmd
 			}
+
 			if m.currentPane == valuesPane {
 				m.addValueToQuery()
+				if m.loading {
+					return m, nil
+				}
+
+				m.loading = true
 				return m, m.executeQuery()
 			}
+
 			if m.currentPane == resultsPane {
 				// Show detail view for selected result
 				if item, ok := m.resultsList.SelectedItem().(resultItem); ok {
@@ -316,6 +328,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+	case spinner.TickMsg:
+		var cmd tea.Cmd
+		m.spinner, cmd = m.spinner.Update(msg)
+		return m, cmd
+
 	case resultsMsg:
 		m.loading = false
 		if msg.err != nil {
@@ -333,8 +350,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.debugView = fmt.Sprintf("Loaded %d results", len(msg.results))
 		return m, nil
+
 	case fieldSelectedMsg:
-		// Field was selected, lists are already updated
 		return m, nil
 	}
 
@@ -377,7 +394,7 @@ func (m *model) updateSizes() {
 	borderWidth := 6 // 2 chars per pane * 3 panes
 	rightPaneWidth := m.width - leftPaneWidth - midPaneWidth - borderWidth
 
-	paneHeight := m.height - 10
+	paneHeight := m.height - 8
 
 	// Set sizes to content area (borders will be added by lipgloss)
 	m.fieldsList.SetSize(leftPaneWidth, paneHeight-2)
@@ -408,7 +425,7 @@ func (m *model) updateFocus() {
 
 func (m model) View() string {
 	if m.width == 0 {
-		return "Loading..."
+		return m.spinner.View()
 	}
 
 	// If showing detail view, render it full screen
@@ -471,19 +488,20 @@ func (m model) View() string {
 
 	status := ""
 	if m.loading {
-		status = "Loading..."
+		status = m.spinner.View() + " Loading..."
 	} else if m.err != nil {
 		status = fmt.Sprintf("Error: %s", m.err)
 	} else if len(m.results) > 0 {
 		status = fmt.Sprintf("%d results", len(m.results))
 	}
 
-	return lipgloss.JoinVertical(lipgloss.Left,
+	status = status + "    " + m.debugView
+
+	return lipgloss.JoinVertical(
+		lipgloss.Left,
 		querySection,
-		"",
 		lipgloss.NewStyle().Foreground(lipgloss.Color("170")).Render(fieldTitle),
 		panesRow,
-		"",
 		status,
 		// m.debugView,
 		help,
@@ -558,8 +576,6 @@ func (m *model) analyzeObject(obj map[string]any, path []string) {
 }
 
 func (m *model) updateFieldsList() {
-	var items []list.Item
-
 	// Get fields at current path level
 	prefix := ""
 	if len(m.fieldPath) > 0 {
@@ -587,6 +603,8 @@ func (m *model) updateFieldsList() {
 		return fields[i].count > fields[j].count
 	})
 
+	var items []list.Item
+
 	for _, f := range fields {
 		items = append(items, f)
 	}
@@ -596,6 +614,7 @@ func (m *model) updateFieldsList() {
 
 func (m *model) selectField() tea.Cmd {
 	if item, ok := m.fieldsList.SelectedItem().(fieldItem); ok {
+		m.selectedField = item
 		// Check if this field has nested fields
 		testPath := append(m.fieldPath, item.name)
 		pathStr := strings.Join(testPath, ".")
@@ -647,6 +666,7 @@ func (m *model) updateResultsView() {
 	var items []list.Item
 
 	for i, result := range m.results {
+		m.resultsList.SetItems(items)
 		items = append(items, resultItem{
 			index: i,
 			data:  result,
@@ -660,28 +680,41 @@ func (m *model) updateResultsView() {
 	}
 }
 
-func (m *model) addValueToQuery() tea.Cmd {
-	if selectedField, ok := m.fieldsList.SelectedItem().(fieldItem); ok {
-		if selectedValue, ok := m.valuesList.SelectedItem().(valueItem); ok {
-			fieldPath := append(m.fieldPath, selectedField.name)
-			fieldStr := "json." + strings.Join(fieldPath, ".")
-
-			current := m.queryInput.Value()
-			if current != "" {
-				current += " AND "
-			}
-
-			// Quote value if it contains spaces
-			value := selectedValue.value
-			if strings.Contains(value, " ") {
-				value = fmt.Sprintf(`"%s"`, value)
-			}
-
-			m.queryInput.SetValue(current + fmt.Sprintf("%s:%s", fieldStr, value))
-			m.debugView = fmt.Sprintf("Added to query: %s:%s", fieldStr, value)
+func replaceExisitingSearch(query, field, value string) string {
+	// Simple replacement logic: look for field:value and replace it
+	parts := strings.Split(query, " AND ")
+	for i, part := range parts {
+		if strings.HasPrefix(part, field+":") {
+			parts[i] = fmt.Sprintf("%s:%s", field, value)
+			return strings.Join(parts, " AND ")
 		}
 	}
-	return func() tea.Msg { return fieldSelectedMsg{} }
+	// If not found, append
+	if query != "" {
+		return query + " AND " + fmt.Sprintf("%s:%s", field, value)
+	}
+	return fmt.Sprintf("%s:%s", field, value)
+}
+
+func (m *model) addValueToQuery() tea.Cmd {
+	if m.selectedField.name == "" {
+		return nil
+	}
+
+	selectedField := m.selectedField
+	if selectedValue, ok := m.valuesList.SelectedItem().(valueItem); ok {
+		fieldPath := append(m.fieldPath, selectedField.name)
+		fieldStr := "json." + strings.Join(fieldPath, ".")
+
+		current := m.queryInput.Value()
+		value := selectedValue.value
+
+		m.queryInput.SetValue(replaceExisitingSearch(current, fieldStr, value))
+		m.debugView = fmt.Sprintf("Added to query: %s:%s", fieldStr, value)
+		return func() tea.Msg { return fieldSelectedMsg{} }
+	}
+
+	return nil
 }
 
 func (m *model) showDetailView(item resultItem) {
