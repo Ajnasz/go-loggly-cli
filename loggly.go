@@ -63,24 +63,29 @@ type Config struct {
 	Size        int
 	From        string
 	To          string
-	Count       bool
 	AllMsg      bool
 	MaxPages    int64
 	Concurrency int
+	Debug       bool
+}
+
+func (c Config) Validate() error {
+	if c.Account == "" {
+		return fmt.Errorf("account is required")
+	}
+	if c.Token == "" {
+		return fmt.Errorf("token is required")
+	}
+	if c.MaxPages <= 0 {
+		return fmt.Errorf("maxPages must be greater than 0")
+	}
+	return nil
 }
 
 // Print usage and exit.
 func printUsage() {
 	fmt.Print(usage)
 	os.Exit(0)
-}
-
-// Assert with msg.
-func assert(ok bool, msg string) {
-	if !ok {
-		fmt.Fprintf(os.Stderr, "Error: %s", msg)
-		os.Exit(1)
-	}
 }
 
 func check(err error) {
@@ -214,19 +219,24 @@ func contextWithInterrupt(ctx context.Context) (context.Context, context.CancelF
 }
 
 func main() {
+	var config Config
 	// Command options.
 	var flags = flag.NewFlagSet("loggly", flag.ExitOnError)
-	var count = flags.Bool("count", false, "")
-	var concurrency = flags.Int("concurrency", 3, "")
+
 	var versionQuery = flags.Bool("version", false, "")
 	var tui = flags.Bool("tui", false, "")
-	var account = flags.String("account", "", "")
-	var maxPages = flags.Int64("maxPages", 3, "")
-	var token = flags.String("token", "", "")
-	var size = flags.Int("size", 100, "")
-	var from = flags.String("from", "-24h", "")
-	var to = flags.String("to", "now", "")
-	var allMsg = flags.Bool("all", false, "")
+	var count = flags.Bool("count", false, "")
+
+	flags.BoolVar(&config.AllMsg, "all", false, "")
+	flags.BoolVar(&config.Debug, "debug", false, "")
+	flags.Int64Var(&config.MaxPages, "maxPages", 3, "")
+	flags.IntVar(&config.Concurrency, "concurrency", 3, "")
+	flags.IntVar(&config.Size, "size", 100, "")
+	flags.StringVar(&config.Account, "account", "", "")
+	flags.StringVar(&config.From, "from", "-24h", "")
+	flags.StringVar(&config.To, "to", "now", "")
+	flags.StringVar(&config.Token, "token", "", "")
+
 	flags.Usage = printUsage
 	flags.Parse(os.Args[1:])
 
@@ -235,27 +245,16 @@ func main() {
 		return
 	}
 
+	fmt.Println("loggly-cli version:", config)
+
 	args := flags.Args()
 	warnInvalidFlagPlacement(flags, args)
-	warnHighConcurrency(*concurrency)
+	warnHighConcurrency(config.Concurrency)
 	query := strings.Join(args, " ")
 	ctx, cancel := contextWithInterrupt(context.Background())
 	defer cancel()
 
-	assert(*account != "", "-account required")
-	assert(*token != "", "-token required")
-
-	config := Config{
-		Account:     *account,
-		Token:       *token,
-		Size:        *size,
-		From:        *from,
-		To:          *to,
-		Count:       *count,
-		AllMsg:      *allMsg,
-		MaxPages:    *maxPages,
-		Concurrency: *concurrency,
-	}
+	check(config.Validate())
 
 	if *tui {
 		runInteractive(ctx, config, query)
