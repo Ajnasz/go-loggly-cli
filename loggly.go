@@ -240,7 +240,7 @@ func main() {
 	assert(*token != "", "-token required")
 
 	if *tui {
-		runInteractive(ctx, *account, query, *token, *from, *to)
+		runInteractive(ctx, *account, *token, *size, *maxPages, query, *from, *to)
 		return
 	}
 
