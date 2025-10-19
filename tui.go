@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Ajnasz/go-loggly-cli/search"
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -18,10 +19,10 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
-type detailMode int
+type resultMode int
 
 const (
-	detailModeRaw detailMode = iota
+	detailModeRaw resultMode = iota
 	detailModeFormatted
 )
 
@@ -46,6 +47,29 @@ var (
 	msgStyle       = lipgloss.NewStyle().Bold(true)
 	timestampStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 )
+
+type resultsKeyMap struct {
+	openDetail    key.Binding
+	openRaw       key.Binding
+	openFormatted key.Binding
+}
+
+func newResultsKeyMap() *resultsKeyMap {
+	return &resultsKeyMap{
+		openDetail: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "view detail"),
+		),
+		openRaw: key.NewBinding(
+			key.WithKeys("1"),
+			key.WithHelp("1", "raw view"),
+		),
+		openFormatted: key.NewBinding(
+			key.WithKeys("2"),
+			key.WithHelp("2", "formatted view"),
+		),
+	}
+}
 
 type resultItemDelegateRaw struct{}
 
@@ -227,7 +251,8 @@ type model struct {
 	fieldValues   map[string]map[string]int
 	showingDetail bool
 
-	detailMode detailMode
+	resultsMode   resultMode
+	resultsKeyMap *resultsKeyMap
 
 	err     error
 	loading bool
@@ -259,6 +284,8 @@ var (
 )
 
 func initialModel(ctx context.Context, config Config, query string) model {
+	resultsKeys := newResultsKeyMap()
+
 	ti := textinput.New()
 	ti.Placeholder = "Enter your Loggly query..."
 	ti.Focus()
@@ -282,22 +309,36 @@ func initialModel(ctx context.Context, config Config, query string) model {
 	resultsListRaw.Title = "Results"
 	resultsListRaw.SetShowStatusBar(false)
 	resultsListRaw.SetFilteringEnabled(false)
-	resultsListRaw.SetShowHelp(false)
+	resultsListRaw.SetShowHelp(true)
 	resultsListRaw.SetShowPagination(true)
 	resultsListRaw.SetShowTitle(true)
 	resultsListRaw.DisableQuitKeybindings()
 	resultsListRaw.SetFilteringEnabled(true)
+	resultsListRaw.AdditionalShortHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			resultsKeys.openRaw,
+			resultsKeys.openFormatted,
+			resultsKeys.openDetail,
+		}
+	}
 
 	// Results list showing compact previews
 	resultsListFormatted := list.New([]list.Item{}, resultItemDelegateFormatted{}, 80, 20)
 	resultsListFormatted.Title = "Results"
 	resultsListFormatted.SetShowStatusBar(false)
 	resultsListFormatted.SetFilteringEnabled(false)
-	resultsListFormatted.SetShowHelp(false)
+	resultsListFormatted.SetShowHelp(true)
 	resultsListFormatted.SetShowPagination(true)
 	resultsListFormatted.SetShowTitle(true)
 	resultsListFormatted.DisableQuitKeybindings()
 	resultsListFormatted.SetFilteringEnabled(true)
+	resultsListFormatted.AdditionalShortHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			resultsKeys.openRaw,
+			resultsKeys.openFormatted,
+			resultsKeys.openDetail,
+		}
+	}
 
 	// Detail viewport for full JSON view
 	detailView := viewport.New(0, 0)
@@ -324,6 +365,8 @@ func initialModel(ctx context.Context, config Config, query string) model {
 		fieldValues:          make(map[string]map[string]int),
 		fieldPath:            []string{},
 		showingDetail:        false,
+		resultsMode:          detailModeRaw,
+		resultsKeyMap:        resultsKeys,
 	}
 }
 
@@ -342,18 +385,34 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.currentPane == resultsPane && !m.showingDetail {
+			switch {
+			case key.Matches(msg, m.resultsKeyMap.openRaw):
+				m.resultsMode = detailModeRaw
+				return m, nil
+			case key.Matches(msg, m.resultsKeyMap.openFormatted):
+				m.resultsMode = detailModeFormatted
+				return m, nil
+			case key.Matches(msg, m.resultsKeyMap.openDetail):
+				// Show detail view for selected result
+				if m.resultsMode == detailModeRaw {
+					if item, ok := m.resultsListRaw.SelectedItem().(resultItem); ok {
+						m.showDetailView(item)
+						m.showingDetail = true
+						m.currentPane = detailPane
+					}
+				} else {
+					// Formatted mode
+					if item, ok := m.resultsListFormatted.SelectedItem().(resultItem); ok {
+						m.showDetailView(item)
+						m.showingDetail = true
+						m.currentPane = detailPane
+					}
+				}
+				return m, nil
+			}
+		}
 		switch msg.String() {
-		case "1":
-			if m.currentPane == resultsPane && !m.showingDetail {
-				m.detailMode = detailModeRaw
-			}
-			return m, nil
-		case "2":
-			if m.currentPane == resultsPane && !m.showingDetail {
-				m.detailMode = detailModeFormatted
-			}
-			return m, nil
-
 		case "ctrl+c", "q":
 			return m, tea.Quit
 
@@ -397,25 +456,6 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				m.loading = true
 				return m, m.executeQuery()
-			}
-
-			if m.currentPane == resultsPane {
-				// Show detail view for selected result
-				if m.detailMode == detailModeRaw {
-					if item, ok := m.resultsListRaw.SelectedItem().(resultItem); ok {
-						m.showDetailView(item)
-						m.showingDetail = true
-						m.currentPane = detailPane
-					}
-				} else {
-					// Formatted mode
-					if item, ok := m.resultsListFormatted.SelectedItem().(resultItem); ok {
-						m.showDetailView(item)
-						m.showingDetail = true
-						m.currentPane = detailPane
-					}
-				}
-				return m, nil
 			}
 
 		case "backspace":
@@ -580,7 +620,7 @@ func (m model) View() string {
 	fieldsSection := fieldsStyle.Width(m.fieldsWidth).MaxHeight(m.paneHeight).Render(m.fieldsList.View())
 	valuesSection := valuesStyle.Width(m.valuesWidth).MaxHeight(m.paneHeight).Render(m.valuesList.View())
 	var resultsSection string
-	if m.detailMode == detailModeRaw {
+	if m.resultsMode == detailModeRaw {
 		resultsSection = resultsStyle.Width(m.resultsWidth).MaxHeight(m.paneHeight).Render(m.resultsListRaw.View())
 	} else {
 		resultsSection = resultsStyle.Width(m.resultsWidth).MaxHeight(m.paneHeight).Render(m.resultsListFormatted.View())
