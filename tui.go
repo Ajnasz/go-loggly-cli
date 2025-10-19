@@ -18,6 +18,13 @@ import (
 	"github.com/charmbracelet/lipgloss"
 )
 
+type detailMode int
+
+const (
+	detailModeRaw detailMode = iota
+	detailModeFormatted
+)
+
 // Custom styles for result items
 var (
 	resultItemStyle = lipgloss.NewStyle().
@@ -35,32 +42,29 @@ var (
 			PaddingRight(2).
 			BorderStyle(lipgloss.RoundedBorder()).
 			BorderForeground(lipgloss.Color("170"))
+
+	msgStyle       = lipgloss.NewStyle().Bold(true)
+	timestampStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 )
 
-// resultItemDelegate is a custom delegate for rendering result items in list view
-type resultItemDelegate struct{}
+type resultItemDelegateRaw struct{}
 
-func (d resultItemDelegate) Height() int                               { return 2 }
-func (d resultItemDelegate) Spacing() int                              { return 1 }
-func (d resultItemDelegate) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
-func (d resultItemDelegate) Render(w io.Writer, m list.Model, index int, item list.Item) {
+func (d resultItemDelegateRaw) Height() int                               { return 2 }
+func (d resultItemDelegateRaw) Spacing() int                              { return 1 }
+func (d resultItemDelegateRaw) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
+func (d resultItemDelegateRaw) Render(w io.Writer, m list.Model, index int, item list.Item) {
 	result, ok := item.(resultItem)
 	if !ok {
 		return
 	}
 
-	// Show a compact preview across 2 lines
 	data, _ := json.Marshal(result.data)
 	preview := string(data)
 
-	// Calculate available width per line
-	maxLen := m.Width() - 4 // Reduce the padding subtraction
-
-	isSelected := index == m.Index()
-
-	// Split into two lines
-	line1 := fmt.Sprintf("%d. %s", index+1, preview)
+	line1 := preview
 	line2 := ""
+
+	maxLen := m.Width() - 4
 
 	if len(preview) > maxLen {
 		line1 = preview[:maxLen]
@@ -71,13 +75,12 @@ func (d resultItemDelegate) Render(w io.Writer, m list.Model, index int, item li
 		}
 	}
 
-	firstLine := line1
-	secondLine := fmt.Sprintf("%s", line2)
-
-	output := firstLine
+	output := line1
 	if line2 != "" {
-		output += "\n" + secondLine
+		output += "\n" + line2
 	}
+
+	isSelected := index == m.Index()
 
 	if isSelected {
 		fmt.Fprint(w, selectedResultStyle.Render(output))
@@ -86,7 +89,59 @@ func (d resultItemDelegate) Render(w io.Writer, m list.Model, index int, item li
 	}
 }
 
-// resultItemDelegate is a custom delegate for rendering result items in list view
+type resultItemDelegateFormatted struct{}
+
+func (d resultItemDelegateFormatted) Height() int                               { return 2 }
+func (d resultItemDelegateFormatted) Spacing() int                              { return 1 }
+func (d resultItemDelegateFormatted) Update(msg tea.Msg, m *list.Model) tea.Cmd { return nil }
+
+func (d resultItemDelegateFormatted) Render(w io.Writer, m list.Model, index int, item list.Item) {
+	result, ok := item.(resultItem)
+	if !ok {
+		return
+	}
+
+	data, _ := json.Marshal(result.data)
+	preview := string(data)
+
+	line1 := ""
+
+	if msg, ok := result.data["message"]; ok {
+		if message, ok := msg.(string); ok {
+			line1 = msgStyle.Render(message)
+		} else {
+			line1 = msgStyle.Render(fmt.Sprintf("%v", msg))
+		}
+	}
+
+	if ts, ok := result.data["timestamp"]; ok {
+		if timestamp, ok := ts.(string); ok {
+			line1 = fmt.Sprintf("%s - %s", timestampStyle.Render(timestamp), line1)
+		}
+	}
+
+	maxLen := m.Width() - 4
+
+	line2 := preview
+
+	if len(line1) > maxLen {
+		line1 = line1[:maxLen]
+	}
+	if len(preview) > maxLen {
+		line2 = preview[:maxLen]
+	} else {
+		line2 = preview
+	}
+
+	output := line1 + "\n" + line2
+	isSelected := index == m.Index()
+
+	if isSelected {
+		fmt.Fprint(w, selectedResultStyle.Render(output))
+	} else {
+		fmt.Fprint(w, resultItemStyle.Render(output))
+	}
+}
 
 type pane int
 
@@ -146,13 +201,14 @@ type model struct {
 	size        int
 	maxPages    int64
 
-	queryInput  textinput.Model
-	fieldsList  list.Model
-	valuesList  list.Model
-	resultsList list.Model
-	detailView  viewport.Model
-	spinner     spinner.Model
-	debugView   string
+	queryInput           textinput.Model
+	fieldsList           list.Model
+	valuesList           list.Model
+	resultsListRaw       list.Model
+	resultsListFormatted list.Model
+	detailView           viewport.Model
+	spinner              spinner.Model
+	debugView            string
 
 	selectedField fieldItem
 
@@ -170,6 +226,8 @@ type model struct {
 	allFields     map[string]int
 	fieldValues   map[string]map[string]int
 	showingDetail bool
+
+	detailMode detailMode
 
 	err     error
 	loading bool
@@ -220,40 +278,52 @@ func initialModel(ctx context.Context, config Config, query string) model {
 	valuesList.SetFilteringEnabled(true)
 
 	// Results list showing compact previews
-	resultsList := list.New([]list.Item{}, resultItemDelegate{}, 80, 20)
-	resultsList.Title = "Results"
-	resultsList.SetShowStatusBar(false)
-	resultsList.SetFilteringEnabled(false)
-	resultsList.SetShowHelp(false)
-	resultsList.SetShowPagination(true)
-	resultsList.SetShowTitle(true)
-	resultsList.DisableQuitKeybindings()
-	resultsList.SetFilteringEnabled(true)
+	resultsListRaw := list.New([]list.Item{}, resultItemDelegateRaw{}, 80, 20)
+	resultsListRaw.Title = "Results"
+	resultsListRaw.SetShowStatusBar(false)
+	resultsListRaw.SetFilteringEnabled(false)
+	resultsListRaw.SetShowHelp(false)
+	resultsListRaw.SetShowPagination(true)
+	resultsListRaw.SetShowTitle(true)
+	resultsListRaw.DisableQuitKeybindings()
+	resultsListRaw.SetFilteringEnabled(true)
+
+	// Results list showing compact previews
+	resultsListFormatted := list.New([]list.Item{}, resultItemDelegateFormatted{}, 80, 20)
+	resultsListFormatted.Title = "Results"
+	resultsListFormatted.SetShowStatusBar(false)
+	resultsListFormatted.SetFilteringEnabled(false)
+	resultsListFormatted.SetShowHelp(false)
+	resultsListFormatted.SetShowPagination(true)
+	resultsListFormatted.SetShowTitle(true)
+	resultsListFormatted.DisableQuitKeybindings()
+	resultsListFormatted.SetFilteringEnabled(true)
 
 	// Detail viewport for full JSON view
 	detailView := viewport.New(0, 0)
 
 	return model{
-		ctx:           ctx,
-		account:       config.Account,
-		token:         config.Token,
-		size:          config.Size,
-		maxPages:      config.MaxPages,
-		from:          config.From,
-		to:            config.To,
-		concurrency:   config.Concurrency,
-		queryInput:    ti,
-		fieldsList:    fieldsList,
-		valuesList:    valuesList,
-		resultsList:   resultsList,
-		detailView:    detailView,
-		spinner:       spinner.New(),
-		debugView:     "",
-		currentPane:   queryPane,
-		allFields:     make(map[string]int),
-		fieldValues:   make(map[string]map[string]int),
-		fieldPath:     []string{},
-		showingDetail: false,
+		ctx:                  ctx,
+		account:              config.Account,
+		token:                config.Token,
+		size:                 config.Size,
+		maxPages:             config.MaxPages,
+		from:                 config.From,
+		to:                   config.To,
+		concurrency:          config.Concurrency,
+		queryInput:           ti,
+		fieldsList:           fieldsList,
+		valuesList:           valuesList,
+		resultsListRaw:       resultsListRaw,
+		resultsListFormatted: resultsListFormatted,
+		detailView:           detailView,
+		spinner:              spinner.New(),
+		debugView:            "",
+		currentPane:          queryPane,
+		allFields:            make(map[string]int),
+		fieldValues:          make(map[string]map[string]int),
+		fieldPath:            []string{},
+		showingDetail:        false,
 	}
 }
 
@@ -273,6 +343,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		switch msg.String() {
+		case "1":
+			if m.currentPane == resultsPane && !m.showingDetail {
+				m.detailMode = detailModeRaw
+			}
+			return m, nil
+		case "2":
+			if m.currentPane == resultsPane && !m.showingDetail {
+				m.detailMode = detailModeFormatted
+			}
+			return m, nil
+
 		case "ctrl+c", "q":
 			return m, tea.Quit
 
@@ -320,10 +401,19 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if m.currentPane == resultsPane {
 				// Show detail view for selected result
-				if item, ok := m.resultsList.SelectedItem().(resultItem); ok {
-					m.showDetailView(item)
-					m.showingDetail = true
-					m.currentPane = detailPane
+				if m.detailMode == detailModeRaw {
+					if item, ok := m.resultsListRaw.SelectedItem().(resultItem); ok {
+						m.showDetailView(item)
+						m.showingDetail = true
+						m.currentPane = detailPane
+					}
+				} else {
+					// Formatted mode
+					if item, ok := m.resultsListFormatted.SelectedItem().(resultItem); ok {
+						m.showDetailView(item)
+						m.showingDetail = true
+						m.currentPane = detailPane
+					}
 				}
 				return m, nil
 			}
@@ -384,7 +474,8 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, cmd)
 		case resultsPane:
 			var cmd tea.Cmd
-			m.resultsList, cmd = m.resultsList.Update(msg)
+			m.resultsListRaw, cmd = m.resultsListRaw.Update(msg)
+			m.resultsListFormatted, _ = m.resultsListFormatted.Update(msg)
 			cmds = append(cmds, cmd)
 		}
 	}
@@ -410,7 +501,8 @@ func (m *model) updateSizes() {
 	// Set sizes to content area (borders will be added by lipgloss)
 	m.fieldsList.SetSize(leftPaneWidth, paneHeight-2)
 	m.valuesList.SetSize(midPaneWidth, paneHeight-2)
-	m.resultsList.SetSize(rightPaneWidth, paneHeight-2)
+	m.resultsListRaw.SetSize(rightPaneWidth, paneHeight-2)
+	m.resultsListFormatted.SetSize(rightPaneWidth, paneHeight-2)
 
 	// Store widths and height for rendering
 	m.fieldsWidth = leftPaneWidth
@@ -487,7 +579,12 @@ func (m model) View() string {
 
 	fieldsSection := fieldsStyle.Width(m.fieldsWidth).MaxHeight(m.paneHeight).Render(m.fieldsList.View())
 	valuesSection := valuesStyle.Width(m.valuesWidth).MaxHeight(m.paneHeight).Render(m.valuesList.View())
-	resultsSection := resultsStyle.Width(m.resultsWidth).MaxHeight(m.paneHeight).Render(m.resultsList.View())
+	var resultsSection string
+	if m.detailMode == detailModeRaw {
+		resultsSection = resultsStyle.Width(m.resultsWidth).MaxHeight(m.paneHeight).Render(m.resultsListRaw.View())
+	} else {
+		resultsSection = resultsStyle.Width(m.resultsWidth).MaxHeight(m.paneHeight).Render(m.resultsListFormatted.View())
+	}
 
 	panesRow := lipgloss.JoinHorizontal(lipgloss.Top,
 		fieldsSection,
@@ -677,14 +774,16 @@ func (m *model) updateResultsView() {
 	var items []list.Item
 
 	for i, result := range m.results {
-		m.resultsList.SetItems(items)
+		m.resultsListRaw.SetItems(items)
+		m.resultsListFormatted.SetItems(items)
 		items = append(items, resultItem{
 			index: i,
 			data:  result,
 		})
 	}
 
-	m.resultsList.SetItems(items)
+	m.resultsListRaw.SetItems(items)
+	m.resultsListFormatted.SetItems(items)
 }
 
 func replaceExisitingSearch(query, field, value string) string {
