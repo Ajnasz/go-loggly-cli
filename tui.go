@@ -112,7 +112,10 @@ type resultItem struct {
 	data  map[string]any
 }
 
-func (i resultItem) FilterValue() string { return fmt.Sprintf("Result %d", i.index+1) }
+func (i resultItem) FilterValue() string {
+	data, _ := json.Marshal(i.data)
+	return string(data)
+}
 func (i resultItem) Title() string {
 	data, _ := json.Marshal(i.data)
 	preview := string(data)
@@ -207,11 +210,13 @@ func initialModel(ctx context.Context, config Config, query string) model {
 	fieldsList := list.New([]list.Item{}, list.NewDefaultDelegate(), 20, 20)
 	fieldsList.Title = "Fields"
 	fieldsList.SetShowStatusBar(false)
+	fieldsList.SetShowHelp(false)
 	fieldsList.SetFilteringEnabled(true)
 
 	valuesList := list.New([]list.Item{}, list.NewDefaultDelegate(), 20, 20)
 	valuesList.Title = "Values"
 	valuesList.SetShowStatusBar(false)
+	valuesList.SetShowHelp(false)
 	valuesList.SetFilteringEnabled(true)
 
 	// Results list showing compact previews
@@ -223,6 +228,7 @@ func initialModel(ctx context.Context, config Config, query string) model {
 	resultsList.SetShowPagination(true)
 	resultsList.SetShowTitle(true)
 	resultsList.DisableQuitKeybindings()
+	resultsList.SetFilteringEnabled(true)
 
 	// Detail viewport for full JSON view
 	detailView := viewport.New(0, 0)
@@ -389,14 +395,17 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *model) updateSizes() {
 	// Each pane with border takes content_width + 2 (for left/right border)
 	// We have 3 panes, so 6 chars total for borders
-	leftPaneWidth := m.width / 7 // 16% for fields
-	midPaneWidth := m.width / 7  // ~16% for values
+	cellWidth := m.width / 12
+	leftPaneWidth := cellWidth * 2 // ~16% for fields
+	midPaneWidth := cellWidth * 2  // ~16% for values
 
 	// Calculate results width: total - fields - values - all borders
 	borderWidth := 6 // 2 chars per pane * 3 panes
 	rightPaneWidth := m.width - leftPaneWidth - midPaneWidth - borderWidth
 
 	paneHeight := m.height - 8
+
+	m.queryInput.Width = m.width - 4
 
 	// Set sizes to content area (borders will be added by lipgloss)
 	m.fieldsList.SetSize(leftPaneWidth, paneHeight-2)
@@ -411,7 +420,7 @@ func (m *model) updateSizes() {
 
 	// Detail view uses most of the screen
 	m.detailView.Width = m.width - 10
-	m.detailView.Height = m.height - 12
+	m.detailView.Height = m.height - 6
 
 	m.debugView = fmt.Sprintf("Sizes: total=%d, left=%d, mid=%d, right=%d, hight=%d", m.width, leftPaneWidth, midPaneWidth, rightPaneWidth, paneHeight)
 }
@@ -447,7 +456,7 @@ func (m model) View() string {
 	if m.currentPane == queryPane {
 		queryStyle = activeStyle
 	}
-	querySection := queryStyle.Width(m.width - 4).Render(
+	querySection := queryStyle.Width(m.width - 2).Render(
 		lipgloss.JoinVertical(lipgloss.Left,
 			titleStyle.Render("Query"),
 			m.queryInput.View(),
@@ -676,10 +685,6 @@ func (m *model) updateResultsView() {
 	}
 
 	m.resultsList.SetItems(items)
-	// Ensure size is set after adding items
-	if m.resultsWidth > 0 && m.paneHeight > 0 {
-		m.resultsList.SetSize(m.resultsWidth, m.paneHeight)
-	}
 }
 
 func replaceExisitingSearch(query, field, value string) string {
