@@ -48,14 +48,27 @@ var (
 	timestampStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("241"))
 )
 
+type queryKeyMap struct {
+	executeQuery key.Binding
+}
+
+func newQueryKeyMap() queryKeyMap {
+	return queryKeyMap{
+		executeQuery: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "execute query"),
+		),
+	}
+}
+
 type resultsKeyMap struct {
 	openDetail    key.Binding
 	openRaw       key.Binding
 	openFormatted key.Binding
 }
 
-func newResultsKeyMap() *resultsKeyMap {
-	return &resultsKeyMap{
+func newResultsKeyMap() resultsKeyMap {
+	return resultsKeyMap{
 		openDetail: key.NewBinding(
 			key.WithKeys("enter"),
 			key.WithHelp("enter", "view detail"),
@@ -71,6 +84,57 @@ func newResultsKeyMap() *resultsKeyMap {
 	}
 }
 
+type detailKeyMap struct {
+	closeDetail key.Binding
+}
+
+func newDetailKeyMap() detailKeyMap {
+	return detailKeyMap{
+		closeDetail: key.NewBinding(
+			key.WithKeys("esc"),
+			key.WithHelp("esc", "close detail"),
+		),
+	}
+}
+
+type fieldKeyMap struct {
+	selectField key.Binding
+	backField   key.Binding
+}
+
+func newFieldKeyMap() fieldKeyMap {
+	return fieldKeyMap{
+		selectField: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "select field"),
+		),
+		backField: key.NewBinding(
+			key.WithKeys("backspace"),
+			key.WithHelp("backspace", "go up"),
+		),
+	}
+}
+
+type valueKeyMap struct {
+	selectValue key.Binding
+}
+
+func newValueKeyMap() valueKeyMap {
+	return valueKeyMap{
+		selectValue: key.NewBinding(
+			key.WithKeys("enter"),
+			key.WithHelp("enter", "select value"),
+		),
+	}
+}
+
+type keyMaps struct {
+	results resultsKeyMap
+	detail  detailKeyMap
+	fields  fieldKeyMap
+	values  valueKeyMap
+	query   queryKeyMap
+}
 type resultItemDelegateRaw struct{}
 
 func (d resultItemDelegateRaw) Height() int                               { return 2 }
@@ -178,12 +242,18 @@ const (
 )
 
 type fieldItem struct {
-	name  string
-	count int
+	name      string
+	count     int
+	hasNested bool
 }
 
 func (i fieldItem) FilterValue() string { return i.name }
-func (i fieldItem) Title() string       { return i.name }
+func (i fieldItem) Title() string {
+	if i.hasNested {
+		return i.name + " »"
+	}
+	return i.name
+}
 func (i fieldItem) Description() string { return fmt.Sprintf("%d occurrences", i.count) }
 
 type resultItem struct {
@@ -251,8 +321,8 @@ type model struct {
 	fieldValues   map[string]map[string]int
 	showingDetail bool
 
-	resultsMode   resultMode
-	resultsKeyMap *resultsKeyMap
+	resultsMode resultMode
+	keyMaps     keyMaps
 
 	err     error
 	loading bool
@@ -285,6 +355,10 @@ var (
 
 func initialModel(ctx context.Context, config Config, query string) model {
 	resultsKeys := newResultsKeyMap()
+	detailKeys := newDetailKeyMap()
+	fieldKeys := newFieldKeyMap()
+	valueKeys := newValueKeyMap()
+	queryKeys := newQueryKeyMap()
 
 	ti := textinput.New()
 	ti.Placeholder = "Enter your Loggly query..."
@@ -297,12 +371,23 @@ func initialModel(ctx context.Context, config Config, query string) model {
 	fieldsList.SetShowStatusBar(false)
 	fieldsList.SetShowHelp(false)
 	fieldsList.SetFilteringEnabled(true)
+	fieldsList.AdditionalShortHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			fieldKeys.selectField,
+			fieldKeys.backField,
+		}
+	}
 
 	valuesList := list.New([]list.Item{}, list.NewDefaultDelegate(), 20, 20)
 	valuesList.Title = "Values"
 	valuesList.SetShowStatusBar(false)
 	valuesList.SetShowHelp(false)
 	valuesList.SetFilteringEnabled(true)
+	valuesList.AdditionalShortHelpKeys = func() []key.Binding {
+		return []key.Binding{
+			valueKeys.selectValue,
+		}
+	}
 
 	// Results list showing compact previews
 	resultsListRaw := list.New([]list.Item{}, resultItemDelegateRaw{}, 80, 20)
@@ -366,7 +451,13 @@ func initialModel(ctx context.Context, config Config, query string) model {
 		fieldPath:            []string{},
 		showingDetail:        false,
 		resultsMode:          detailModeRaw,
-		resultsKeyMap:        resultsKeys,
+		keyMaps: keyMaps{
+			results: resultsKeys,
+			detail:  detailKeys,
+			fields:  fieldKeys,
+			values:  valueKeys,
+			query:   queryKeys,
+		},
 	}
 }
 
@@ -385,15 +476,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
-		if m.currentPane == resultsPane && !m.showingDetail {
+		if m.showingDetail {
 			switch {
-			case key.Matches(msg, m.resultsKeyMap.openRaw):
+			case key.Matches(msg, m.keyMaps.detail.closeDetail):
+				m.showingDetail = false
+				m.currentPane = resultsPane
+				return m, nil
+			}
+		} else if m.currentPane == resultsPane {
+			switch {
+			case key.Matches(msg, m.keyMaps.results.openRaw):
 				m.resultsMode = detailModeRaw
 				return m, nil
-			case key.Matches(msg, m.resultsKeyMap.openFormatted):
+			case key.Matches(msg, m.keyMaps.results.openFormatted):
 				m.resultsMode = detailModeFormatted
 				return m, nil
-			case key.Matches(msg, m.resultsKeyMap.openDetail):
+			case key.Matches(msg, m.keyMaps.results.openDetail):
 				// Show detail view for selected result
 				if m.resultsMode == detailModeRaw {
 					if item, ok := m.resultsListRaw.SelectedItem().(resultItem); ok {
@@ -411,45 +509,32 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, nil
 			}
-		}
-		switch msg.String() {
-		case "ctrl+c", "q":
-			return m, tea.Quit
-
-		case "esc":
-			if m.showingDetail {
-				m.showingDetail = false
-				m.currentPane = resultsPane
-				return m, nil
-			}
-
-		case "tab":
-			if !m.showingDetail {
-				m.currentPane = (m.currentPane + 1) % 4
-				m.updateFocus()
-			}
-			return m, nil
-
-		case "shift+tab":
-			if !m.showingDetail {
-				m.currentPane = (m.currentPane - 1 + 4) % 4
-				m.updateFocus()
-			}
-			return m, nil
-
-		case "enter":
-			if m.currentPane == queryPane && !m.loading {
-				m.loading = true
-				return m, m.executeQuery()
-			}
-
-			if m.currentPane == fieldsPane {
+		} else if m.currentPane == fieldsPane {
+			switch {
+			case key.Matches(msg, m.keyMaps.fields.selectField):
 				cmd := m.selectField()
 				return m, cmd
+			case key.Matches(msg, m.keyMaps.fields.backField):
+				if len(m.fieldPath) > 0 {
+					m.fieldPath = m.fieldPath[:len(m.fieldPath)-1]
+					m.updateFieldsList()
+				}
+				return m, nil
 			}
+		} else if m.currentPane == valuesPane {
+			switch {
+			case key.Matches(msg, m.keyMaps.values.selectValue):
+				cmd := m.addValueToQuery()
+				if m.loading {
+					return m, nil
+				}
 
-			if m.currentPane == valuesPane {
-				m.addValueToQuery()
+				m.loading = true
+				return m, tea.Batch(m.executeQuery(), cmd)
+			}
+		} else if m.currentPane == queryPane {
+			switch {
+			case key.Matches(msg, m.keyMaps.query.executeQuery):
 				if m.loading {
 					return m, nil
 				}
@@ -457,13 +542,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loading = true
 				return m, m.executeQuery()
 			}
+		}
 
-		case "backspace":
-			if m.currentPane == fieldsPane && len(m.fieldPath) > 0 {
-				m.fieldPath = m.fieldPath[:len(m.fieldPath)-1]
-				m.updateFieldsList()
-				return m, nil
-			}
+		switch msg.String() {
+		case "ctrl+c", "q":
+			return m, tea.Quit
+
+		case "tab":
+			m.currentPane = (m.currentPane + 1) % 4
+			m.updateFocus()
+			return m, nil
+
+		case "shift+tab":
+			m.currentPane = (m.currentPane - 1 + 4) % 4
+			m.updateFocus()
+			return m, nil
+
 		}
 
 	case spinner.TickMsg:
@@ -732,6 +826,8 @@ func (m *model) updateFieldsList() {
 
 	// Map to track unique values count for each field at current level
 	fieldValueCounts := make(map[string]int)
+	// Track which fields have nested children
+	hasNestedFields := make(map[string]bool)
 
 	for fieldPath, values := range m.fieldValues {
 		if after, ok := strings.CutPrefix(fieldPath, prefix); ok {
@@ -739,12 +835,17 @@ func (m *model) updateFieldsList() {
 			parts := strings.SplitN(remainder, ".", 2)
 			// Count unique values for this field
 			fieldValueCounts[parts[0]] = len(values)
+			// Check if this field has nested children
+			if len(parts) > 1 {
+				hasNestedFields[parts[0]] = true
+			}
 		}
 	}
 
 	var fields []fieldItem
 	for field, count := range fieldValueCounts {
-		fields = append(fields, fieldItem{name: field, count: count})
+		hasNested := hasNestedFields[field]
+		fields = append(fields, fieldItem{name: field, count: count, hasNested: hasNested})
 	}
 
 	sort.Slice(fields, func(i, j int) bool {
@@ -831,15 +932,15 @@ func replaceExisitingSearch(query, field, value string) string {
 	parts := strings.Split(query, " AND ")
 	for i, part := range parts {
 		if strings.HasPrefix(part, field+":") {
-			parts[i] = fmt.Sprintf("%s:%s", field, value)
+			parts[i] = fmt.Sprintf("%s:%q", field, value)
 			return strings.Join(parts, " AND ")
 		}
 	}
 	// If not found, append
 	if query != "" {
-		return query + " AND " + fmt.Sprintf("%s:%s", field, value)
+		return query + " AND " + fmt.Sprintf("%s:%q", field, value)
 	}
-	return fmt.Sprintf("%s:%s", field, value)
+	return fmt.Sprintf("%s:%q", field, value)
 }
 
 func (m *model) addValueToQuery() tea.Cmd {
