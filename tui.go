@@ -86,6 +86,8 @@ func newResultsKeyMap() resultsKeyMap {
 
 type detailKeyMap struct {
 	closeDetail key.Binding
+	nextDetail  key.Binding
+	prevDetail  key.Binding
 }
 
 func newDetailKeyMap() detailKeyMap {
@@ -93,6 +95,14 @@ func newDetailKeyMap() detailKeyMap {
 		closeDetail: key.NewBinding(
 			key.WithKeys("esc"),
 			key.WithHelp("esc", "close detail"),
+		),
+		nextDetail: key.NewBinding(
+			key.WithKeys("n"),
+			key.WithHelp("n", "next result"),
+		),
+		prevDetail: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "previous result"),
 		),
 	}
 }
@@ -482,6 +492,26 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.showingDetail = false
 				m.currentPane = resultsPane
 				return m, nil
+			case key.Matches(msg, m.keyMaps.detail.nextDetail):
+				count := len(m.resultsListRaw.Items())
+				newIndex := min(m.resultsListRaw.Index()+1, count)
+				m.debugView = fmt.Sprintf("Next detail oldindex: %d, index: %d", m.resultsListRaw.Index(), newIndex)
+				m.resultsListRaw.Select(newIndex)
+				m.resultsListFormatted.Select(newIndex)
+				if item, ok := m.resultsListRaw.SelectedItem().(resultItem); ok {
+					m.showDetailView(item)
+				}
+				return m, nil
+			case key.Matches(msg, m.keyMaps.detail.prevDetail):
+				newIndex := max(m.resultsListRaw.Index()-1, 0)
+				m.debugView = fmt.Sprintf("Prev detail index: %d", newIndex)
+				m.resultsListRaw.Select(newIndex)
+				m.resultsListFormatted.Select(newIndex)
+				if item, ok := m.resultsListRaw.SelectedItem().(resultItem); ok {
+					m.showDetailView(item)
+				}
+				return m, nil
+
 			}
 		} else if m.currentPane == resultsPane {
 			switch {
