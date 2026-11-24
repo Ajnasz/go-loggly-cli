@@ -125,8 +125,8 @@ func printLogMSG(events []any) error {
 }
 
 func execCount(ctx context.Context, config Config, query string) {
-	c := search.New(config.Account, config.Token)
-	q := search.NewQuery(query).Size(1).From(config.From).To(config.To)
+	c := search.New(config.Account, config.Token).SetConcurrency(1)
+	q := search.NewQuery(query).MaxPage(1).Size(1).From(config.From).To(config.To)
 	res, err := c.Fetch(ctx, *q)
 	for {
 		select {
