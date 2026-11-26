@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync/atomic"
 
 	"github.com/Ajnasz/go-loggly-cli/orderedbuffer"
@@ -69,6 +70,14 @@ func (c *Client) Get(ctx context.Context, path string) (*http.Response, error) {
 	return client.Do(r)
 }
 
+func formatHeaders(headers http.Header) string {
+	var formatted strings.Builder
+	for k, v := range headers {
+		fmt.Fprintf(&formatted, "%s: %s\n", k, v)
+	}
+	return formatted.String()
+}
+
 // GetJSON from the given path.
 func (c *Client) GetJSON(ctx context.Context, path string) (j *simplejson.Json, err error) {
 	res, err := c.Get(ctx, path)
@@ -84,7 +93,7 @@ func (c *Client) GetJSON(ctx context.Context, path string) (j *simplejson.Json, 
 		if err != nil {
 			body = []byte(err.Error())
 		}
-		return nil, fmt.Errorf("go-loggly-search: %q, %s", res.Status, body)
+		return nil, fmt.Errorf("go-loggly-search: %q, %s %s", res.Status, formatHeaders(res.Header), body)
 	}
 
 	body, err := io.ReadAll(res.Body)
