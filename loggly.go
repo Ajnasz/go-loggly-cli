@@ -23,12 +23,12 @@ const usage = `
 
     -account <name>   account name
     -token <word>     user token
-    -size <count>     response event count [100]
+    -size <count>     response event count [100] (1 for count only)
     -from <time>      starting time [-24h]
     -to <time>        ending time [now]
     -count            print total event count
     -all              print the entire loggly event instead of just the message
-    -maxPages <count> maximum number of pages to query [3]
+    -maxPages <count> maximum number of pages to query [3] (1 for count only)
     -concurrency <count> number of concurrent page fetchers [3]. If loggly returns with http error consider reducing this value.
     -tui              launch interactive terminal UI
     -version          print version information
@@ -65,7 +65,7 @@ type Config struct {
 	To          string
 	AllMsg      bool
 	MaxPages    int64
-	Concurrency int
+	Concurrency int64
 	Debug       bool
 }
 
@@ -124,10 +124,17 @@ func printLogMSG(events []any) error {
 	return printJSON(ret)
 }
 
+func makeSearch(ctx context.Context, config Config, query string) (chan search.Response, chan error) {
+	c := search.New(config.Account, config.Token).SetConcurrency(config.Concurrency)
+	q := search.NewQuery(query).MaxPage(config.MaxPages).Size(config.Size).From(config.From).To(config.To)
+	return c.Fetch(ctx, *q)
+}
+
 func execCount(ctx context.Context, config Config, query string) {
-	c := search.New(config.Account, config.Token).SetConcurrency(1)
-	q := search.NewQuery(query).MaxPage(1).Size(1).From(config.From).To(config.To)
-	res, err := c.Fetch(ctx, *q)
+	config.Size = 1
+	config.MaxPages = 1
+	config.Concurrency = 1
+	res, err := makeSearch(ctx, config, query)
 	for {
 		select {
 		case <-ctx.Done():
@@ -159,10 +166,7 @@ func sendQuery(
 	config Config,
 	query string,
 ) {
-	c := search.New(config.Account, config.Token).SetConcurrency(config.Concurrency)
-	q := search.NewQuery(query).Size(config.Size).From(config.From).To(config.To).MaxPage(config.MaxPages)
-	res, err := c.Fetch(ctx, *q)
-
+	res, err := makeSearch(ctx, config, query)
 	for {
 		select {
 		case <-ctx.Done():
@@ -196,7 +200,7 @@ func warnInvalidFlagPlacement(flags *flag.FlagSet, args []string) {
 	}
 }
 
-func warnHighConcurrency(concurrency int) {
+func warnHighConcurrency(concurrency int64) {
 	if concurrency > 3 {
 		fmt.Fprintf(os.Stderr, "Warning: High concurrency (%d) may lead to rate limiting or temporary blocking by Loggly. If loggly returns with error, consider reducing the concurrency level.\n", concurrency)
 	}
@@ -230,7 +234,7 @@ func main() {
 	flags.BoolVar(&config.AllMsg, "all", false, "")
 	flags.BoolVar(&config.Debug, "debug", false, "")
 	flags.Int64Var(&config.MaxPages, "maxPages", 3, "")
-	flags.IntVar(&config.Concurrency, "concurrency", 3, "")
+	flags.Int64Var(&config.Concurrency, "concurrency", 3, "")
 	flags.IntVar(&config.Size, "size", 100, "")
 	flags.StringVar(&config.Account, "account", "", "")
 	flags.StringVar(&config.From, "from", "-24h", "")
@@ -244,8 +248,6 @@ func main() {
 		fmt.Println(version)
 		return
 	}
-
-	fmt.Println("loggly-cli version:", config)
 
 	args := flags.Args()
 	warnInvalidFlagPlacement(flags, args)

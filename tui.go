@@ -343,7 +343,7 @@ type model struct {
 	account     string
 	token       string
 	from        string
-	concurrency int
+	concurrency int64
 	to          string
 	size        int
 	maxPages    int64

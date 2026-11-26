@@ -46,11 +46,8 @@ func New(account string, token string) *Client {
 	return c
 }
 
-func (c *Client) SetConcurrency(n int) *Client {
-	if n < 1 {
-		n = 1
-	}
-	c.concurrency.Store(int64(n))
+func (c *Client) SetConcurrency(n int64) *Client {
+	c.concurrency.Store(max(1, n))
 	return c
 }
 
