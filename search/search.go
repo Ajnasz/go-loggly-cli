@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,9 +12,8 @@ import (
 	"sync/atomic"
 
 	"github.com/Ajnasz/go-loggly-cli/orderedbuffer"
-	"github.com/Ajnasz/go-loggly-cli/semaphore"
-	"github.com/bitly/go-simplejson"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/semaphore"
 )
 
 // Client Loggly search client with user credentials, loggly
@@ -79,54 +79,98 @@ func formatHeaders(headers http.Header) string {
 }
 
 // GetJSON from the given path.
-func (c *Client) GetJSON(ctx context.Context, path string) (j *simplejson.Json, err error) {
+func (c *Client) GetJSON(ctx context.Context, path string) (io.ReadCloser, error) {
 	res, err := c.Get(ctx, path)
-
-	if err != nil {
-		return
-	}
-
-	defer res.Body.Close()
-
-	if res.StatusCode >= 400 {
-		body, err := io.ReadAll(res.Body)
-		if err != nil {
-			body = []byte(err.Error())
-		}
-		return nil, fmt.Errorf("go-loggly-search: %q, %s %s", res.Status, formatHeaders(res.Header), body)
-	}
-
-	body, err := io.ReadAll(res.Body)
 
 	if err != nil {
 		return nil, err
 	}
 
-	return simplejson.NewJson(body)
+	if res.StatusCode >= 400 {
+		body, err := io.ReadAll(res.Body)
+		defer res.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("go-loggly-search: %q, %s %s", res.Status, formatHeaders(res.Header), err.Error())
+		}
+		return nil, fmt.Errorf("go-loggly-search: %q, %s %s", res.Status, formatHeaders(res.Header), body)
+	}
+
+	return res.Body, nil
+}
+
+// SearchInstance represents a search instance in Loggly.
+type SearchInstance struct {
+	ID          string  `json:"id"`
+	DateFrom    int64   `json:"date_from"`
+	DateTo      int64   `json:"date_to"`
+	ElapsedTime float64 `json:"elapsed_time"`
+	Status      string  `json:"status"`
+}
+
+type searchResponse struct {
+	RSID *SearchInstance `json:"rsid"`
 }
 
 // CreateSearch Create a new search instance, loggly requires that a search
 // is made before you may fetch events from it with a second call.
-func (c *Client) CreateSearch(ctx context.Context, params string) (*simplejson.Json, error) {
-	return c.GetJSON(ctx, "/search?"+params)
+func (c *Client) CreateSearch(ctx context.Context, params string) (*SearchInstance, error) {
+	body, err := c.GetJSON(ctx, "/search?"+params)
+	if err != nil {
+		return nil, err
+	}
+
+	defer body.Close()
+
+	searchResponse := searchResponse{}
+
+	if err := json.UnmarshalRead(body, &searchResponse); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal search instance: %w", err)
+	}
+
+	if searchResponse.RSID == nil {
+		return nil, fmt.Errorf("failed to create search instance: rsid is nil")
+	}
+
+	return searchResponse.RSID, nil
+}
+
+// Events represents the events response from Loggly.
+type Events struct {
+	TotalEvents int64 `json:"total_events"`
+	Page        int64 `json:"page"`
+	Events      []any `json:"events"`
 }
 
 // GetEvents must be called after CreateSearch() with the
 // correct rsid to reference the search.
-func (c *Client) GetEvents(ctx context.Context, params string) (*simplejson.Json, error) {
-	return c.GetJSON(ctx, "/events?"+params)
+func (c *Client) GetEvents(ctx context.Context, params string) (*Events, error) {
+	body, err := c.GetJSON(ctx, "/events?"+params)
+
+	if err != nil {
+		return nil, err
+	}
+
+	defer body.Close()
+
+	events := &Events{}
+
+	if err := json.UnmarshalRead(body, events); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal events: %w", err)
+	}
+
+	return events, nil
 }
 
 // Search response with total events, page number
 // and the events array.
-func (c *Client) Search(ctx context.Context, j *simplejson.Json, page int) (*Response, error) {
-	id := j.GetPath("rsid", "id").MustString()
+func (c *Client) Search(ctx context.Context, searchInstance *SearchInstance, page int) (*Response, error) {
+	id := searchInstance.ID
 
 	qs := url.Values{}
 	qs.Set("rsid", id)
 	qs.Set("page", strconv.Itoa(page))
 
-	j, err := c.GetEvents(ctx, qs.Encode())
+	events, err := c.GetEvents(ctx, qs.Encode())
 
 	if err != nil {
 		return nil, err
@@ -135,20 +179,20 @@ func (c *Client) Search(ctx context.Context, j *simplejson.Json, page int) (*Res
 	// Search response with total events, page number
 	// and the events array.
 	return &Response{
-		Total:  j.Get("total_events").MustInt64(),
-		Page:   j.Get("page").MustInt64(),
-		Events: j.Get("events").MustArray(),
+		Total:  events.TotalEvents,
+		Page:   events.Page,
+		Events: events.Events,
 	}, nil
 
 }
 
 func (c *Client) fetchAndStorePage(
 	ctx context.Context,
-	j *simplejson.Json,
+	searchInstance *SearchInstance,
 	responsesStore *orderedbuffer.OrderedBuffer[Response],
 	page int,
 ) (*Response, error) {
-	res, err := c.Search(ctx, j, page)
+	res, err := c.Search(ctx, searchInstance, page)
 	if err != nil {
 		return nil, err
 	}
@@ -174,17 +218,14 @@ func shouldStopFetching(err error, res *Response, pageSize int) bool {
 
 func (c *Client) fetchAllPages(ctx context.Context, q Query, resChan chan Response) error {
 	defer close(resChan)
-	j, err := c.CreateSearch(ctx, q.String())
+	search, err := c.CreateSearch(ctx, q.String())
 
 	if err != nil {
 		return err
 	}
 
 	concurrent := min(q.maxPages, c.concurrency.Load())
-	sem := semaphore.New(concurrent)
-
-	var page atomic.Int64
-	page.Store(-1)
+	sem := semaphore.NewWeighted(concurrent)
 
 	var hasMore atomic.Bool
 	hasMore.Store(true)
@@ -192,15 +233,16 @@ func (c *Client) fetchAllPages(ctx context.Context, q Query, resChan chan Respon
 
 	errg, ctx := errgroup.WithContext(ctx)
 
-	for {
-		if err := sem.Acquire(ctx); err != nil {
-			return err
-		}
-		p := int(page.Add(1))
-		errg.Go(func() error {
-			defer sem.Release()
+	var acquireErr error
 
-			res, err := c.fetchAndStorePage(ctx, j, responsesStore, p)
+	for i := 0; i < int(q.maxPages); i++ {
+		if acquireErr = sem.Acquire(ctx, 1); acquireErr != nil {
+			break
+		}
+		errg.Go(func() error {
+			defer sem.Release(1)
+
+			res, err := c.fetchAndStorePage(ctx, search, responsesStore, i)
 
 			if shouldStopFetching(err, res, q.size) {
 				hasMore.Store(false)
@@ -208,14 +250,18 @@ func (c *Client) fetchAllPages(ctx context.Context, q Query, resChan chan Respon
 			return err
 		})
 
-		shouldBreak := page.Load() >= q.maxPages || !hasMore.Load()
+		shouldBreak := !hasMore.Load()
 
 		if shouldBreak {
 			break
 		}
 	}
 
-	return errg.Wait()
+	if err := errg.Wait(); err != nil {
+		return err
+	}
+
+	return acquireErr
 }
 
 // Fetch Search response with total events, page number
